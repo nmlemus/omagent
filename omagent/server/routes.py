@@ -264,6 +264,54 @@ def create_router() -> APIRouter:
         await store.save(session)
         return session.to_dict()
 
+    @router.get("/sessions/{session_id}/journal")
+    async def get_journal(session_id: str, limit: int = 100, event_types: str | None = None):
+        """Get structured events from the session journal."""
+        from omagent.core.journal import EventJournal
+        from omagent.core.workspace import get_workspaces_dir
+
+        logs_dir = get_workspaces_dir() / session_id / "logs"
+        if not logs_dir.exists():
+            return {"events": [], "message": "No journal found for this session"}
+
+        journal = EventJournal(session_id=session_id, logs_dir=logs_dir)
+        types = event_types.split(",") if event_types else None
+        events = journal.read_events(limit=limit, event_types=types)
+        return {"events": events, "count": len(events)}
+
+    @router.get("/sessions/{session_id}/artifacts")
+    async def list_artifacts(session_id: str):
+        """List artifacts in a session workspace."""
+        from omagent.core.workspace import Workspace, get_workspaces_dir
+
+        ws_root = get_workspaces_dir() / session_id
+        if not ws_root.exists():
+            return {"artifacts": [], "message": "No workspace found"}
+
+        ws = Workspace(session_id=session_id)
+        return {"artifacts": ws.list_artifacts()}
+
+    @router.get("/sessions/{session_id}/plan")
+    async def get_plan(session_id: str):
+        """Get the current agent plan for a session."""
+        try:
+            from omagent.core.planner import PlanStore
+            plan_store = PlanStore()
+            plan = await plan_store.load(session_id)
+            if plan:
+                return plan.to_dict()
+            return {"message": "No plan found for this session"}
+        except Exception:
+            return {"message": "Plan store not available"}
+
+    @router.get("/sessions/{session_id}/memory")
+    async def get_memory(session_id: str):
+        """Get persistent memories for a session."""
+        from omagent.core.memory import MemoryStore
+        mem_store = MemoryStore()
+        memories = await mem_store.get_all(session_id)
+        return {"memories": memories}
+
     @router.get("/health")
     async def health():
         return {"status": "ok", "version": "0.1.0"}

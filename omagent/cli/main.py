@@ -40,8 +40,18 @@ def _build_loop(pack_name: str, session_id: str | None = None):
         system_prompt = f"You are a helpful AI assistant. Pack: {pack_name}."
 
     from omagent.core.tracker import ActivityTracker
+    from omagent.core.workspace import Workspace
+    from omagent.core.journal import EventJournal
+    from omagent.core.memory import ConversationSummarizer, MemoryStore
 
-    session = Session(id=session_id or __import__("uuid").uuid4().hex, pack_name=pack_name)
+    sid = session_id or __import__("uuid").uuid4().hex
+    session = Session(id=sid, pack_name=pack_name)
+
+    workspace = Workspace(sid)
+    journal = EventJournal(sid, workspace.logs_dir)
+    summarizer = ConversationSummarizer()
+
+    session.workspace_path = str(workspace.root)
 
     loop = AgentLoop(
         session=session,
@@ -52,6 +62,9 @@ def _build_loop(pack_name: str, session_id: str | None = None):
         system_prompt=system_prompt,
         store=store,
         tracker=ActivityTracker(),
+        workspace=workspace,
+        journal=journal,
+        summarizer=summarizer,
     )
     # Attach mcp_servers list so async callers can connect them
     loop._pending_mcp_servers = mcp_servers
@@ -243,6 +256,71 @@ def session_list():
         console.print(table)
 
     asyncio.run(_list())
+
+
+@cli.group()
+def workspace():
+    """Manage workspaces."""
+    pass
+
+
+@workspace.command("list")
+def workspace_list():
+    """List session workspaces."""
+    from omagent.core.workspace import get_workspaces_dir
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    ws_dir = get_workspaces_dir()
+    if not ws_dir.exists():
+        console.print("[dim]No workspaces found.[/]")
+        return
+
+    table = Table(title="Workspaces")
+    table.add_column("Session ID", style="cyan")
+    table.add_column("Artifacts")
+    table.add_column("Notebook")
+    table.add_column("Size")
+
+    for d in sorted(ws_dir.iterdir(), reverse=True):
+        if d.is_dir():
+            artifacts = len(list((d / "artifacts").iterdir())) if (d / "artifacts").exists() else 0
+            has_nb = "Yes" if (d / "notebooks" / "session.ipynb").exists() else "No"
+            size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+            size_str = f"{size/1024:.1f}KB" if size < 1024*1024 else f"{size/1024/1024:.1f}MB"
+            table.add_row(d.name[:16] + "…", str(artifacts), has_nb, size_str)
+
+    console.print(table)
+
+
+@workspace.command("open")
+@click.argument("session_id")
+def workspace_open(session_id: str):
+    """Show workspace contents."""
+    from omagent.core.workspace import get_workspaces_dir
+    from rich.console import Console
+    from rich.tree import Tree
+
+    console = Console()
+    ws_dir = get_workspaces_dir()
+
+    # Find matching workspace
+    matches = [d for d in ws_dir.iterdir() if d.name.startswith(session_id)]
+    if not matches:
+        console.print(f"[red]No workspace found for: {session_id}[/]")
+        return
+
+    ws_path = matches[0]
+    tree = Tree(f"[bold cyan]{ws_path.name}[/]")
+    for subdir in sorted(ws_path.iterdir()):
+        if subdir.is_dir():
+            branch = tree.add(f"[bold]{subdir.name}/[/]")
+            for f in sorted(subdir.iterdir()):
+                size = f.stat().st_size
+                branch.add(f"{f.name} [dim]({size} bytes)[/]")
+
+    console.print(tree)
 
 
 @cli.command()

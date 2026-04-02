@@ -15,3 +15,5 @@ venv/
 .DS_Store
 *.png
 .omc/state/
+*.csv
+uv.lock

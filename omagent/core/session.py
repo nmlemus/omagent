@@ -27,6 +27,14 @@ class Session:
         self.messages: list[dict] = []
         self.created_at = datetime.now(timezone.utc).isoformat()
         self.updated_at = self.created_at
+        self.workspace_path: str | None = None
+        self.status: str = "active"
+        self.title: str | None = None
+        self.goal: str | None = None
+        self.total_tokens_in: int = 0
+        self.total_tokens_out: int = 0
+        self.total_cost: float = 0.0
+        self.summary: str | None = None
 
     def add_user_message(self, content: str) -> None:
         self.messages.append({"role": "user", "content": content})
@@ -64,6 +72,14 @@ class Session:
             "messages": self.messages,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "workspace_path": self.workspace_path,
+            "status": self.status,
+            "title": self.title,
+            "goal": self.goal,
+            "total_tokens_in": self.total_tokens_in,
+            "total_tokens_out": self.total_tokens_out,
+            "total_cost": self.total_cost,
+            "summary": self.summary,
         }
 
     @classmethod
@@ -72,6 +88,14 @@ class Session:
         s.messages = data.get("messages", [])
         s.created_at = data.get("created_at", s.created_at)
         s.updated_at = data.get("updated_at", s.updated_at)
+        s.workspace_path = data.get("workspace_path")
+        s.status = data.get("status", "active")
+        s.title = data.get("title")
+        s.goal = data.get("goal")
+        s.total_tokens_in = int(data.get("total_tokens_in") or 0)
+        s.total_tokens_out = int(data.get("total_tokens_out") or 0)
+        s.total_cost = float(data.get("total_cost") or 0.0)
+        s.summary = data.get("summary")
         return s
 
     def fork(self, new_id: str | None = None) -> "Session":
@@ -171,6 +195,21 @@ class SessionStore:
                 updated_at TEXT NOT NULL
             )
         """)
+        # Migration: add new columns if they don't exist
+        for col, default in [
+            ("workspace_path", "NULL"),
+            ("status", "'active'"),
+            ("title", "NULL"),
+            ("goal", "NULL"),
+            ("total_tokens_in", "0"),
+            ("total_tokens_out", "0"),
+            ("total_cost", "0.0"),
+            ("summary", "NULL"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE sessions ADD COLUMN {col} TEXT DEFAULT {default}")
+            except Exception:
+                pass  # column already exists
         await db.commit()
 
     async def create(self, pack_name: str = "default") -> Session:
@@ -183,8 +222,12 @@ class SessionStore:
             await self._ensure_schema(db)
             await db.execute(
                 """
-                INSERT OR REPLACE INTO sessions (id, pack_name, messages, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO sessions (
+                    id, pack_name, messages, created_at, updated_at,
+                    workspace_path, status, title, goal,
+                    total_tokens_in, total_tokens_out, total_cost, summary
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
@@ -192,6 +235,14 @@ class SessionStore:
                     json.dumps(session.messages),
                     session.created_at,
                     session.updated_at,
+                    session.workspace_path,
+                    session.status,
+                    session.title,
+                    session.goal,
+                    session.total_tokens_in,
+                    session.total_tokens_out,
+                    session.total_cost,
+                    session.summary,
                 ),
             )
             await db.commit()
@@ -200,7 +251,12 @@ class SessionStore:
         async with aiosqlite.connect(self.db_path) as db:
             await self._ensure_schema(db)
             async with db.execute(
-                "SELECT id, pack_name, messages, created_at, updated_at FROM sessions WHERE id = ?",
+                """
+                SELECT id, pack_name, messages, created_at, updated_at,
+                       workspace_path, status, title, goal,
+                       total_tokens_in, total_tokens_out, total_cost, summary
+                FROM sessions WHERE id = ?
+                """,
                 (session_id,),
             ) as cursor:
                 row = await cursor.fetchone()
@@ -212,6 +268,14 @@ class SessionStore:
                     "messages": json.loads(row[2]),
                     "created_at": row[3],
                     "updated_at": row[4],
+                    "workspace_path": row[5],
+                    "status": row[6],
+                    "title": row[7],
+                    "goal": row[8],
+                    "total_tokens_in": row[9],
+                    "total_tokens_out": row[10],
+                    "total_cost": row[11],
+                    "summary": row[12],
                 })
 
     async def list_sessions(self, limit: int = 50) -> list[dict]:

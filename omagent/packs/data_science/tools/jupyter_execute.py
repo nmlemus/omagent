@@ -9,9 +9,10 @@ logger = logging.getLogger(__name__)
 class JupyterExecuteTool(Tool):
     """Execute Python code in a persistent Jupyter kernel."""
 
-    def __init__(self):
+    def __init__(self, workspace=None):
         self._kernel_manager = None
         self._kernel_client = None
+        self._workspace = workspace
 
     @property
     def name(self) -> str:
@@ -144,6 +145,17 @@ class JupyterExecuteTool(Tool):
             result["output"] = result["stdout"] or (
                 outputs[0].get("text", "") if outputs else "Code executed successfully"
             )
+
+        # Save cell and artifacts to workspace if available
+        if self._workspace is not None and not error_info:
+            try:
+                # Save any base64 images to artifacts
+                for i, out in enumerate(outputs):
+                    if "image_base64" in out:
+                        self._workspace.save_image_base64(f"output_{self._workspace._cell_counter + 1}_{i}", out["image_base64"])
+                self._workspace.append_notebook_cell(code, outputs)
+            except Exception as e:
+                logger.warning("Failed to save cell to workspace: %s", e)
 
         return result
 
