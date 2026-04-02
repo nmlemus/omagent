@@ -4,9 +4,11 @@ import uuid
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+from omagent.server.auth import verify_bearer_token
 
 from omagent.core.events import (
     TextDeltaEvent, ToolCallEvent, ToolResultEvent,
@@ -28,7 +30,7 @@ class ChatResponse(BaseModel):
 
 
 def create_router() -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(dependencies=[Depends(verify_bearer_token)])
     store = SessionStore()
 
     @router.post("/chat", response_model=ChatResponse)
@@ -201,6 +203,27 @@ def create_router() -> APIRouter:
             return {"packs": packs}
         except Exception:
             return {"packs": []}
+
+    @router.get("/sessions/{session_id}/timeline")
+    async def get_session_timeline(
+        session_id: str,
+        limit: int = 100,
+        event_types: str | None = None,
+    ):
+        """Get chronological activity events for a session."""
+        from omagent.core.tracker import ActivityTracker
+        tracker = ActivityTracker()
+        types = event_types.split(",") if event_types else None
+        timeline = await tracker.get_timeline(session_id, limit=limit, event_types=types)
+        return {"session_id": session_id, "timeline": timeline}
+
+    @router.get("/activity/daily")
+    async def get_daily_activity(date: str | None = None):
+        """Get daily activity report. Pass ?date=2026-04-01 or omit for today."""
+        from omagent.core.tracker import ActivityTracker
+        tracker = ActivityTracker()
+        report = await tracker.get_daily_report(target_date=date)
+        return report
 
     @router.get("/health")
     async def health():

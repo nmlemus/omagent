@@ -39,6 +39,8 @@ def _build_loop(pack_name: str, session_id: str | None = None):
     except Exception:
         system_prompt = f"You are a helpful AI assistant. Pack: {pack_name}."
 
+    from omagent.core.tracker import ActivityTracker
+
     session = Session(id=session_id or __import__("uuid").uuid4().hex, pack_name=pack_name)
 
     loop = AgentLoop(
@@ -49,6 +51,7 @@ def _build_loop(pack_name: str, session_id: str | None = None):
         hooks=HookRunner(),
         system_prompt=system_prompt,
         store=store,
+        tracker=ActivityTracker(),
     )
     # Attach mcp_servers list so async callers can connect them
     loop._pending_mcp_servers = mcp_servers
@@ -120,6 +123,52 @@ def run(prompt: str, pack: str | None):
                 await agent_loop.mcp_manager.disconnect_all()
 
     asyncio.run(_run())
+
+
+@cli.command("config")
+def show_config():
+    """Show active configuration."""
+    from omagent.core.config import get_config
+    from rich.console import Console
+    from rich.table import Table
+
+    config = get_config()
+    console = Console()
+    table = Table(title="omagent Configuration")
+    table.add_column("Setting", style="cyan")
+    table.add_column("Value")
+
+    for field_name, value in config.model_dump().items():
+        # Mask API key
+        display = "****" if field_name == "api_key" and value else str(value)
+        table.add_row(field_name, display)
+
+    console.print(table)
+
+
+@cli.command()
+@click.argument("when", default="today")
+def activity(when: str):
+    """Show activity report. Usage: omagent activity [today|yesterday|2026-04-01]"""
+    from omagent.core.tracker import ActivityTracker
+    from datetime import datetime, timezone, timedelta
+
+    tracker = ActivityTracker()
+    _today = datetime.now(timezone.utc).date()
+    if when == "today":
+        target = _today.isoformat()
+    elif when == "yesterday":
+        target = (_today - timedelta(days=1)).isoformat()
+    else:
+        target = when
+
+    async def _show():
+        report = await tracker.format_daily_report(target)
+        from rich.console import Console
+        Console().print(report)
+
+    import asyncio
+    asyncio.run(_show())
 
 
 @cli.command()
