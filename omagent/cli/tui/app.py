@@ -153,7 +153,7 @@ class OmagentApp(App):
 
                     # If there was streaming text, finalize it before the tool card
                     if assistant_text:
-                        chat.finalize_assistant_message(assistant_text)
+                        await chat.finalize_assistant_message(assistant_text)
                         assistant_text = ""
 
                     chat.hide_thinking()
@@ -203,7 +203,7 @@ class OmagentApp(App):
 
                 elif isinstance(event, DoneEvent):
                     if assistant_text:
-                        chat.finalize_assistant_message(assistant_text)
+                        await chat.finalize_assistant_message(assistant_text)
                         assistant_text = ""
                     self._turn_count += 1
                     if activity:

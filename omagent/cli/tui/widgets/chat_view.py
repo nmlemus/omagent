@@ -56,10 +56,13 @@ class ChatView(ScrollableContainer):
         self._current_assistant.update_content(text)
         self.scroll_end(animate=False)
 
-    def finalize_assistant_message(self, text: str) -> None:
-        """Finalize the assistant message."""
+    async def finalize_assistant_message(self, text: str) -> None:
+        """Finalize the assistant message with markdown rendering."""
         if self._current_assistant is not None:
-            self._current_assistant.update_content(text)
+            try:
+                await self._current_assistant.finalize_with_markdown(text)
+            except Exception:
+                self._current_assistant.update_content(text)
             self._current_assistant = None
         self.scroll_end(animate=False)
 

@@ -19,8 +19,8 @@ class MessageCard(Widget):
         self.content = content
         self.timestamp = datetime.now().strftime("%H:%M:%S")
         self._label_widget: Static | None = None
-        self._content_widget: Widget | None = None
-        self._use_markdown = role == "assistant"
+        self._content_widget: Static | None = None
+        self._finalized = False
 
     def compose(self) -> ComposeResult:
         role_labels = {
@@ -35,10 +35,8 @@ class MessageCard(Widget):
         self._label_widget = Static(f"{label} {time_str}", classes="message-label")
         yield self._label_widget
 
-        if self._use_markdown and self.content:
-            self._content_widget = Markdown(self.content, classes="message-content-md")
-        else:
-            self._content_widget = Static(self.content, classes="message-content")
+        # Always use Static for initial render (streaming compatible)
+        self._content_widget = Static(self.content, classes="message-content")
         yield self._content_widget
 
         self.add_class(f"message-card-{self.role}")
@@ -47,11 +45,19 @@ class MessageCard(Widget):
     def update_content(self, new_content: str) -> None:
         """Update the content (used for streaming assistant messages)."""
         self.content = new_content
-        if self._content_widget is None:
-            return
-        if self._use_markdown:
-            if isinstance(self._content_widget, Markdown):
-                self._content_widget.update(new_content)
-        else:
-            if isinstance(self._content_widget, Static):
-                self._content_widget.update(new_content)
+        if self._content_widget is not None:
+            self._content_widget.update(new_content)
+
+    async def finalize_with_markdown(self, content: str) -> None:
+        """Replace Static with Markdown widget for final rendered content."""
+        self.content = content
+        if self._content_widget is not None and self.role == "assistant":
+            try:
+                md_widget = Markdown(content, classes="message-content-md")
+                await self._content_widget.mount_after(md_widget)
+                self._content_widget.remove()
+                self._content_widget = None
+                self._finalized = True
+            except Exception:
+                # Fallback: just update the static
+                self._content_widget.update(content)
