@@ -204,6 +204,9 @@ class AgentLoop:
 
             # --- Process each tool call ---
             for tc in tool_calls:
+                # Yield the tool call event so TUI can show the card
+                yield tc
+
                 permission = self.policy.check(tc.name, tc.input)
 
                 if permission == Permission.DENY:
