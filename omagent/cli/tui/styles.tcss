@@ -1,17 +1,19 @@
-/* omagent TUI Stylesheet */
+/* === omagent TUI — Material Design 3 Terminal Theme === */
 
 Screen {
-    background: $surface;
+    background: #1a1a2e;
+    color: #e0e0e6;
 }
 
 Header {
     dock: top;
-    background: $primary;
-    color: $text;
+    background: #16162a;
+    color: #a8b4f0;
 }
 
 Footer {
     dock: bottom;
+    background: #16162a;
 }
 
 #main-container {
@@ -24,25 +26,136 @@ Footer {
 
 #chat-view {
     height: 1fr;
-    border: none;
     scrollbar-size: 1 1;
 }
 
+/* === Message Cards === */
+.message-card {
+    margin: 0 1 1 1;
+    padding: 1 2;
+    height: auto;
+}
+
+.message-card-user {
+    border-left: thick #a8b4f0;
+    margin-left: 2;
+}
+
+.message-card-assistant {
+    border-left: thick #80cbc4;
+}
+
+.message-card-system {
+    color: #9898a8;
+    padding: 0 2;
+    margin: 0 1;
+}
+
+.message-card-error {
+    border-left: thick #ef9a9a;
+    background: #2a1a1a;
+}
+
+.message-label {
+    height: auto;
+}
+
+.message-content {
+    height: auto;
+    margin-top: 0;
+}
+
+/* === Tool Cards === */
+.tool-card {
+    margin: 1 2 1 4;
+    border: round #3a3a50;
+    background: #232340;
+    height: auto;
+}
+
+.tool-card-header {
+    height: 1;
+    padding: 0 1;
+    background: #16162a;
+    color: #9898a8;
+}
+
+.tool-card-input {
+    padding: 1 2;
+    height: auto;
+    border-bottom: solid #2e2e42;
+}
+
+.tool-card-output {
+    padding: 1 2;
+    height: auto;
+    color: #9898a8;
+}
+
+.tool-card-error {
+    border: round #ef9a9a;
+}
+
+/* === Thinking Indicator === */
+.thinking-indicator {
+    color: #ffe082;
+    padding: 0 2;
+    margin: 0 1;
+    height: 1;
+}
+
+/* === Step Progress === */
+.step-progress {
+    color: #9898a8;
+    padding: 0 2;
+    margin: 0 1;
+    height: 1;
+}
+
+/* === Status Bar === */
+StatusBar {
+    dock: bottom;
+    height: 1;
+    background: #16162a;
+    color: #9898a8;
+    layout: horizontal;
+}
+
+.status-segment {
+    height: 1;
+    padding: 0 1;
+    width: auto;
+    content-align: left middle;
+}
+
+.status-indicator-active {
+    color: #ffe082;
+}
+
+.status-indicator-ready {
+    color: #a5d6a7;
+}
+
+/* === Input Area === */
 #message-input {
     dock: bottom;
     height: 3;
     margin: 0 1;
-    border: tall $accent;
+    border: tall #3a3a50;
+    background: #232340;
+    color: #e0e0e6;
 }
 
 #message-input:focus {
-    border: tall $primary;
+    border: tall #a8b4f0;
 }
 
+/* === Sidebar === */
 #sidebar {
-    width: 35;
-    border-left: tall $surface-lighten-2;
+    width: 30;
+    border-left: solid #2e2e42;
     padding: 1;
+    background: #16162a;
     overflow-y: auto;
 }
 
@@ -50,76 +163,38 @@ Footer {
     display: none;
 }
 
-#status-bar {
-    dock: bottom;
-    height: 1;
-    background: $primary-darken-2;
-    color: $text;
-    padding: 0 1;
-}
-
-/* Chat message styles */
-.user-message {
-    background: $primary-darken-3;
-    margin: 0 1 1 1;
-    padding: 1;
-    border: round $primary-darken-1;
-}
-
-.assistant-message {
-    margin: 0 1 1 1;
-    padding: 1;
-}
-
-.system-message {
-    color: $text-muted;
-    margin: 0 1 1 1;
-    padding: 0 1;
-}
-
-.error-message {
-    color: $error;
-    background: $error 10%;
-    margin: 0 1 1 1;
-    padding: 1;
-    border: round $error;
-}
-
-.tool-call {
-    color: $accent;
-    margin: 0 1 0 3;
-    padding: 0 1;
-}
-
-.tool-result {
-    color: $text-muted;
-    margin: 0 1 1 3;
-    padding: 0 1;
-}
-
-.tool-result-error {
-    color: $error;
-    margin: 0 1 1 3;
-    padding: 0 1;
-}
-
-/* Sidebar sections */
-.sidebar-section {
-    margin-bottom: 1;
-}
-
 .sidebar-title {
+    color: #a8b4f0;
     text-style: bold;
-    color: $accent;
     margin-bottom: 0;
 }
 
 .sidebar-value {
-    color: $text;
+    color: #e0e0e6;
     margin-left: 1;
+    height: auto;
 }
 
 .sidebar-tool-item {
-    color: $text-muted;
+    color: #9898a8;
     margin-left: 1;
+    height: auto;
+}
+
+/* === Activity Log === */
+#activity-log {
+    height: 8;
+    border-top: solid #3a3a50;
+    background: #16162a;
+    padding: 0 1;
+    overflow-y: auto;
+}
+
+#activity-log.hidden {
+    display: none;
+}
+
+.activity-entry {
+    color: #9898a8;
+    height: 1;
 }
