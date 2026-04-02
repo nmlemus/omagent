@@ -25,6 +25,7 @@ def _build_loop(pack_name: str, session_id: str | None = None):
     registry.register_many([ReadFileTool(), WriteFileTool(), ListDirTool(), BashTool()])
 
     policy = PermissionPolicy()
+    mcp_servers = []
 
     # Try to load domain pack if available
     try:
@@ -34,12 +35,13 @@ def _build_loop(pack_name: str, session_id: str | None = None):
         system_prompt = pack.system_prompt
         registry.register_many(pack.tools)
         policy.load_pack_permissions(pack.permissions)
+        mcp_servers = pack.mcp_servers
     except Exception:
         system_prompt = f"You are a helpful AI assistant. Pack: {pack_name}."
 
     session = Session(id=session_id or __import__("uuid").uuid4().hex, pack_name=pack_name)
 
-    return AgentLoop(
+    loop = AgentLoop(
         session=session,
         registry=registry,
         provider=LiteLLMProvider(),
@@ -48,6 +50,25 @@ def _build_loop(pack_name: str, session_id: str | None = None):
         system_prompt=system_prompt,
         store=store,
     )
+    # Attach mcp_servers list so async callers can connect them
+    loop._pending_mcp_servers = mcp_servers
+    return loop
+
+
+async def _connect_mcp(loop) -> None:
+    """Connect any MCP servers declared in the pack and register their tools."""
+    servers = getattr(loop, "_pending_mcp_servers", [])
+    if not servers:
+        return
+    from omagent.mcp.manager import MCPManager
+    manager = MCPManager()
+    for server_cfg in servers:
+        try:
+            await manager.connect_server(server_cfg)
+        except Exception:
+            pass  # already logged inside connect_server
+    await manager.register_tools(loop.registry)
+    loop.mcp_manager = manager
 
 
 @click.group()
@@ -65,10 +86,12 @@ def chat(pack: str | None, session_id: str | None):
 
     pack_name = pack or os.getenv("OMAGENT_PACK", "default")
 
-    def loop_factory(sid=None):
-        return _build_loop(pack_name, sid or session_id)
+    async def loop_factory_async(sid=None):
+        loop = _build_loop(pack_name, sid or session_id)
+        await _connect_mcp(loop)
+        return loop
 
-    asyncio.run(run_repl(loop_factory, pack_name=pack_name))
+    asyncio.run(run_repl(loop_factory_async, pack_name=pack_name))
 
 
 @cli.command()
@@ -84,12 +107,17 @@ def run(prompt: str, pack: str | None):
     agent_loop = _build_loop(pack_name)
 
     async def _run():
-        async for event in agent_loop.run(prompt):
-            if isinstance(event, TextDeltaEvent):
-                console.print(event.content, end="")
-            elif isinstance(event, ErrorEvent):
-                console.print(f"\n[red]error:[/] {event.message}")
-        console.print()  # final newline
+        await _connect_mcp(agent_loop)
+        try:
+            async for event in agent_loop.run(prompt):
+                if isinstance(event, TextDeltaEvent):
+                    console.print(event.content, end="")
+                elif isinstance(event, ErrorEvent):
+                    console.print(f"\n[red]error:[/] {event.message}")
+            console.print()  # final newline
+        finally:
+            if agent_loop.mcp_manager is not None:
+                await agent_loop.mcp_manager.disconnect_all()
 
     asyncio.run(_run())
 

@@ -51,9 +51,17 @@ def print_help() -> None:
 """)
 
 
+async def _make_loop(loop_factory, sid=None):
+    """Call loop_factory, awaiting it if it is a coroutine function."""
+    import inspect
+    if inspect.iscoroutinefunction(loop_factory):
+        return await loop_factory(sid)
+    return loop_factory(sid)
+
+
 async def run_repl(loop_factory, pack_name: str = "default") -> None:
     """
-    loop_factory: callable(session_id=None) -> AgentLoop
+    loop_factory: callable(session_id=None) -> AgentLoop  (may be async)
     Called once per session to create a fresh AgentLoop.
     """
     print_welcome(pack_name)
@@ -64,7 +72,7 @@ async def run_repl(loop_factory, pack_name: str = "default") -> None:
         style=PROMPT_STYLE,
     )
 
-    agent_loop = loop_factory()
+    agent_loop = await _make_loop(loop_factory)
 
     while True:
         try:
@@ -78,6 +86,8 @@ async def run_repl(loop_factory, pack_name: str = "default") -> None:
             )
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Goodbye.[/]")
+            if agent_loop.mcp_manager is not None:
+                await agent_loop.mcp_manager.disconnect_all()
             break
 
         user_input = user_input.strip()
@@ -91,6 +101,8 @@ async def run_repl(loop_factory, pack_name: str = "default") -> None:
 
             if cmd == "/exit":
                 console.print("[dim]Goodbye.[/]")
+                if agent_loop.mcp_manager is not None:
+                    await agent_loop.mcp_manager.disconnect_all()
                 break
             elif cmd == "/help":
                 print_help()
@@ -104,7 +116,9 @@ async def run_repl(loop_factory, pack_name: str = "default") -> None:
             elif cmd == "/session" and len(parts) > 1:
                 subcmd = parts[1].lower()
                 if subcmd == "new":
-                    agent_loop = loop_factory()
+                    if agent_loop.mcp_manager is not None:
+                        await agent_loop.mcp_manager.disconnect_all()
+                    agent_loop = await _make_loop(loop_factory)
                     console.print("[dim]New session started.[/]")
                 elif subcmd == "list":
                     if agent_loop.store:

@@ -57,6 +57,7 @@ class AgentLoop:
         self.hooks = hooks
         self.system_prompt = system_prompt
         self.store = store  # if set, auto-save after each turn
+        self.mcp_manager = None  # set after async MCP connection
 
     async def run(
         self, user_message: str

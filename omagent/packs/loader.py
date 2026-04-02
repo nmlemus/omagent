@@ -29,6 +29,7 @@ class DomainPack:
     tools: list[Tool] = field(default_factory=list)
     permissions: dict[str, str] = field(default_factory=dict)
     skills: list[Path] = field(default_factory=list)
+    mcp_servers: list[dict] = field(default_factory=list)
     pack_dir: Path | None = None
 
 
@@ -117,6 +118,7 @@ class DomainPackLoader:
             tools=tools,
             permissions=config.get("permissions", {}),
             skills=skills,
+            mcp_servers=config.get("mcp_servers", []),
             pack_dir=pack_dir,
         )
 
