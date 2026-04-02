@@ -198,3 +198,69 @@ StatusBar {
     color: #9898a8;
     height: 1;
 }
+
+/* === Markdown Content === */
+.message-content-md {
+    height: auto;
+    margin: 0;
+    padding: 0;
+}
+
+Markdown {
+    height: auto;
+    margin: 0;
+    padding: 0;
+}
+
+MarkdownH1 {
+    color: #a8b4f0;
+    text-style: bold;
+    margin: 1 0 0 0;
+}
+
+MarkdownH2 {
+    color: #80cbc4;
+    text-style: bold;
+    margin: 1 0 0 0;
+}
+
+MarkdownH3 {
+    color: #ce93d8;
+    text-style: bold;
+    margin: 1 0 0 0;
+}
+
+MarkdownFence {
+    background: #232340;
+    margin: 1 0;
+    padding: 1 2;
+    border: round #3a3a50;
+}
+
+MarkdownBlockQuote {
+    border-left: thick #3a3a50;
+    padding-left: 2;
+    color: #9898a8;
+}
+
+MarkdownBulletList {
+    margin: 0 0 0 2;
+}
+
+MarkdownOrderedList {
+    margin: 0 0 0 2;
+}
+
+MarkdownTable {
+    margin: 1 0;
+}
+
+/* === Splash Screen === */
+SplashScreen {
+    height: auto;
+    margin: 1 2;
+}
+
+#splash-logo {
+    text-align: center;
+}

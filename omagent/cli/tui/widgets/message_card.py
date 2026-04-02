@@ -1,6 +1,5 @@
 # omagent/cli/tui/widgets/message_card.py
-"""Message card widget — structured message display for all roles."""
-import json
+"""Message card widget — structured message display with markdown support."""
 from datetime import datetime
 from textual.app import ComposeResult
 from textual.widget import Widget
@@ -20,7 +19,8 @@ class MessageCard(Widget):
         self.content = content
         self.timestamp = datetime.now().strftime("%H:%M:%S")
         self._label_widget: Static | None = None
-        self._content_widget: Static | None = None
+        self._content_widget: Widget | None = None
+        self._use_markdown = role == "assistant"
 
     def compose(self) -> ComposeResult:
         role_labels = {
@@ -35,15 +35,23 @@ class MessageCard(Widget):
         self._label_widget = Static(f"{label} {time_str}", classes="message-label")
         yield self._label_widget
 
-        self._content_widget = Static(self.content, classes="message-content")
+        if self._use_markdown and self.content:
+            self._content_widget = Markdown(self.content, classes="message-content-md")
+        else:
+            self._content_widget = Static(self.content, classes="message-content")
         yield self._content_widget
 
-        # Set card class based on role
         self.add_class(f"message-card-{self.role}")
         self.add_class("message-card")
 
     def update_content(self, new_content: str) -> None:
         """Update the content (used for streaming assistant messages)."""
         self.content = new_content
-        if self._content_widget:
-            self._content_widget.update(new_content)
+        if self._content_widget is None:
+            return
+        if self._use_markdown:
+            if isinstance(self._content_widget, Markdown):
+                self._content_widget.update(new_content)
+        else:
+            if isinstance(self._content_widget, Static):
+                self._content_widget.update(new_content)

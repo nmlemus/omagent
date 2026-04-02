@@ -68,14 +68,17 @@ class OmagentApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        from omagent.cli.tui.widgets.splash import SplashScreen
         self._init_loop()
         self.query_one("#message-input", MessageInput).focus()
         chat = self.query_one("#chat-view", ChatView)
+        splash = SplashScreen()
+        chat.mount(splash)
         chat.add_system_message(
-            f"Welcome to [bold]omagent[/bold] — Oh My Agent\n\n"
             f"Pack: [#a8b4f0]{self.pack_name}[/] | "
-            f"Session: [#80cbc4]{self._agent_loop.session.id[:8]}…[/]\n\n"
-            f"Type a message to start. [dim]/help for commands | Ctrl+E events | Ctrl+T sidebar[/]"
+            f"Session: [#80cbc4]{self._agent_loop.session.id[:8]}…[/] | "
+            f"Model: [dim]{getattr(self._agent_loop.provider, 'model', 'unknown').split('/')[-1]}[/]\n"
+            f"[dim]/help for commands | Ctrl+E events | Ctrl+T sidebar[/]"
         )
         self._update_sidebar()
         self._update_status_bar_meta()
