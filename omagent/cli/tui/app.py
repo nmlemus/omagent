@@ -84,7 +84,7 @@ class OmagentApp(App):
         self._agent_loop = self.loop_factory(self.pack_name, self._session_id)
         self._session_id = self._agent_loop.session.id
 
-    async def on_message_input_submitted(self, event: MessageInput.Submitted) -> None:
+    async def on_message_input_user_submitted(self, event: MessageInput.UserSubmitted) -> None:
         """Handle message submission from input."""
         message = event.value.strip()
         if not message:

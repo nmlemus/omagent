@@ -5,15 +5,15 @@ from textual.message import Message
 
 
 class MessageInput(Input):
-    """Input widget that fires a Submitted message on Enter."""
+    """Input widget that posts a UserSubmitted message on Enter."""
 
-    class Submitted(Message):
+    class UserSubmitted(Message):
         """Posted when the user presses Enter."""
         def __init__(self, value: str) -> None:
             super().__init__()
             self.value = value
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Intercept the built-in Input.Submitted and re-post as MessageInput.Submitted."""
-        event.stop()
-        self.post_message(MessageInput.Submitted(event.value))
+    async def action_submit(self) -> None:
+        """Override submit action to post our custom message instead."""
+        value = self.value
+        self.post_message(MessageInput.UserSubmitted(value))
