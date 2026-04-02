@@ -138,19 +138,29 @@ async def test_chat_creates_new_session_when_none_given(client):
     assert sid1 != sid2
 
 
+def _parse_sse(text: str) -> list[dict]:
+    """Parse SSE response body into a list of event dicts.
+
+    Handles both legacy single-line ``data: {...}`` chunks and the new
+    multi-field format with ``id:``, ``event:``, and ``data:`` lines.
+    """
+    events = []
+    for chunk in text.strip().split("\n\n"):
+        for line in chunk.strip().splitlines():
+            line = line.strip()
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+                break
+    return events
+
+
 @pytest.mark.asyncio
 async def test_stream_returns_sse(client):
     resp = await client.post("/stream", json={"message": "hello"})
     assert resp.status_code == 200
     assert "text/event-stream" in resp.headers["content-type"]
 
-    # Parse SSE events from the body
-    events = []
-    for chunk in resp.text.strip().split("\n\n"):
-        chunk = chunk.strip()
-        if chunk.startswith("data: "):
-            events.append(json.loads(chunk[6:]))
-
+    events = _parse_sse(resp.text)
     types = [e.get("type") for e in events]
     assert "text_delta" in types
     assert "done" in types
@@ -159,11 +169,7 @@ async def test_stream_returns_sse(client):
 @pytest.mark.asyncio
 async def test_stream_text_delta_has_content(client):
     resp = await client.post("/stream", json={"message": "hello"})
-    events = []
-    for chunk in resp.text.strip().split("\n\n"):
-        chunk = chunk.strip()
-        if chunk.startswith("data: "):
-            events.append(json.loads(chunk[6:]))
+    events = _parse_sse(resp.text)
 
     text_events = [e for e in events if e.get("type") == "text_delta"]
     assert len(text_events) >= 1
@@ -174,11 +180,7 @@ async def test_stream_text_delta_has_content(client):
 @pytest.mark.asyncio
 async def test_stream_events_have_session_id(client):
     resp = await client.post("/stream", json={"message": "hi"})
-    events = []
-    for chunk in resp.text.strip().split("\n\n"):
-        chunk = chunk.strip()
-        if chunk.startswith("data: "):
-            events.append(json.loads(chunk[6:]))
+    events = _parse_sse(resp.text)
 
     for event in events:
         assert "session_id" in event

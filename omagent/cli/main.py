@@ -171,6 +171,70 @@ def activity(when: str):
     asyncio.run(_show())
 
 
+@cli.group()
+def session():
+    """Manage sessions."""
+    pass
+
+
+@session.command("export")
+@click.argument("session_id")
+@click.option("--format", "fmt", type=click.Choice(["json", "markdown"]), default="json")
+@click.option("--output", "-o", default=None, help="Output file path")
+def session_export(session_id: str, fmt: str, output: str | None):
+    """Export a session to JSON or Markdown."""
+    from omagent.core.session import SessionStore
+    from rich.console import Console
+
+    console = Console()
+    store = SessionStore()
+
+    async def _export():
+        s = await store.load(session_id)
+        if s is None:
+            console.print(f"[red]Session not found:[/] {session_id}")
+            return
+        if fmt == "markdown":
+            content = s.export_markdown()
+        else:
+            content = s.export_json()
+
+        if output:
+            from pathlib import Path
+            Path(output).write_text(content)
+            console.print(f"[green]Exported to {output}[/]")
+        else:
+            console.print(content)
+
+    asyncio.run(_export())
+
+
+@session.command("list")
+def session_list():
+    """List recent sessions."""
+    from omagent.core.session import SessionStore
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    store = SessionStore()
+
+    async def _list():
+        sessions = await store.list_sessions()
+        if not sessions:
+            console.print("[dim]No sessions found.[/]")
+            return
+        table = Table(title="Sessions")
+        table.add_column("ID", style="cyan")
+        table.add_column("Pack")
+        table.add_column("Updated")
+        for s in sessions:
+            table.add_row(s["id"][:12] + "…", s["pack_name"], s["updated_at"][:19])
+        console.print(table)
+
+    asyncio.run(_list())
+
+
 @cli.command()
 @click.option("--host", default=None, envvar="OMAGENT_HOST", help="Bind host")
 @click.option("--port", default=None, type=int, envvar="OMAGENT_PORT", help="Bind port")

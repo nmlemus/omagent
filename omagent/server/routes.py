@@ -1,7 +1,7 @@
 # omagent/server/routes.py
+import asyncio
 import json
 import uuid
-from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, Depends
@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from omagent.server.auth import verify_bearer_token
+from omagent.server.ws import manager
 
 from omagent.core.events import (
     TextDeltaEvent, ToolCallEvent, ToolResultEvent,
@@ -27,6 +28,11 @@ class ChatResponse(BaseModel):
     session_id: str
     response: str
     tool_calls: list[dict] = []
+
+
+# In-memory permission response store (simple approach)
+_permission_responses: dict[str, asyncio.Event] = {}
+_permission_decisions: dict[str, bool] = {}
 
 
 def create_router() -> APIRouter:
@@ -76,30 +82,14 @@ def create_router() -> APIRouter:
         loop = loop_factory(pack_name, body.session_id)
 
         async def event_generator():
+            event_counter = 0
             async for event in loop.run(body.message):
-                data = {
-                    "type": event.type.value,
-                    "session_id": loop.session.id,
-                }
+                data = event.to_dict()
+                data["session_id"] = loop.session.id
 
-                if isinstance(event, TextDeltaEvent):
-                    data["content"] = event.content
-                elif isinstance(event, ToolCallEvent):
-                    data["tool_call"] = {"id": event.id, "name": event.name, "input": event.input}
-                elif isinstance(event, ToolResultEvent):
-                    data["tool_result"] = {
-                        "id": event.tool_use_id,
-                        "name": event.tool_name,
-                        "result": event.result,
-                        "is_error": event.is_error,
-                    }
-                elif isinstance(event, PermissionDeniedEvent):
-                    data["tool_name"] = event.tool_name
-                    data["reason"] = event.reason
-                elif isinstance(event, ErrorEvent):
-                    data["message"] = event.message
-
-                yield f"data: {json.dumps(data)}\n\n"
+                event_id = str(event_counter)
+                event_counter += 1
+                yield f"id: {event_id}\nevent: {data['type']}\ndata: {json.dumps(data)}\n\n"
 
         return StreamingResponse(
             event_generator(),
@@ -114,7 +104,8 @@ def create_router() -> APIRouter:
     @router.websocket("/ws/chat")
     async def ws_chat(websocket: WebSocket):
         """WebSocket endpoint for real-time streaming chat."""
-        await websocket.accept()
+        connection_id = str(uuid.uuid4())
+        await manager.connect(websocket, connection_id)
 
         loop_factory = websocket.app.state.loop_factory
         default_pack = websocket.app.state.default_pack
@@ -128,7 +119,7 @@ def create_router() -> APIRouter:
                 session_id = data.get("session_id")
 
                 if not message:
-                    await websocket.send_json({"type": "error", "message": "Empty message"})
+                    await manager.send_to_connection(connection_id, {"type": "error", "message": "Empty message"})
                     continue
 
                 # Create or reuse loop
@@ -136,32 +127,34 @@ def create_router() -> APIRouter:
                     current_loop = loop_factory(pack_name, session_id)
                     current_loop._ws_session_id = session_id or current_loop.session.id
 
+                # Bind connection to session after first message
+                manager.bind_session(connection_id, current_loop.session.id)
+
                 async for event in current_loop.run(message):
-                    event_data = {
-                        "type": event.type.value,
-                        "session_id": current_loop.session.id,
-                    }
-
-                    if isinstance(event, TextDeltaEvent):
-                        event_data["content"] = event.content
-                    elif isinstance(event, ToolCallEvent):
-                        event_data["tool_call"] = {"id": event.id, "name": event.name, "input": event.input}
-                    elif isinstance(event, ToolResultEvent):
-                        event_data["tool_result"] = {
-                            "id": event.tool_use_id,
-                            "name": event.tool_name,
-                            "result": event.result,
-                            "is_error": event.is_error,
-                        }
-                    elif isinstance(event, PermissionDeniedEvent):
-                        event_data["tool_name"] = event.tool_name
-                    elif isinstance(event, ErrorEvent):
-                        event_data["message"] = event.message
-
-                    await websocket.send_json(event_data)
+                    event_data = event.to_dict()
+                    event_data["session_id"] = current_loop.session.id
+                    await manager.send_to_connection(connection_id, event_data)
 
         except WebSocketDisconnect:
-            pass
+            manager.disconnect(connection_id)
+
+    @router.post("/sessions/{session_id}/approve/{tool_call_id}")
+    async def approve_tool(session_id: str, tool_call_id: str):
+        """Approve a pending tool execution."""
+        key = f"{session_id}:{tool_call_id}"
+        _permission_decisions[key] = True
+        if key in _permission_responses:
+            _permission_responses[key].set()
+        return {"approved": True}
+
+    @router.post("/sessions/{session_id}/deny/{tool_call_id}")
+    async def deny_tool(session_id: str, tool_call_id: str):
+        """Deny a pending tool execution."""
+        key = f"{session_id}:{tool_call_id}"
+        _permission_decisions[key] = False
+        if key in _permission_responses:
+            _permission_responses[key].set()
+        return {"denied": True}
 
     @router.get("/sessions")
     async def list_sessions(limit: int = 50):
@@ -224,6 +217,52 @@ def create_router() -> APIRouter:
         tracker = ActivityTracker()
         report = await tracker.get_daily_report(target_date=date)
         return report
+
+    @router.post("/sessions/{session_id}/fork")
+    async def fork_session(session_id: str):
+        """Fork a session, creating a deep copy with a new ID."""
+        from fastapi import HTTPException
+        session = await store.load(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        forked = session.fork()
+        await store.save(forked)
+        return {"forked_id": forked.id, "original_id": session_id, "message_count": len(forked.messages)}
+
+    @router.get("/sessions/{session_id}/export")
+    async def export_session(session_id: str, format: str = "json"):
+        """Export a session as JSON or Markdown."""
+        from fastapi import HTTPException
+        from fastapi.responses import PlainTextResponse
+        session = await store.load(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if format == "markdown":
+            return PlainTextResponse(session.export_markdown(), media_type="text/markdown")
+        return session.to_dict()
+
+    @router.post("/sessions/import")
+    async def import_session(request: Request):
+        """Import a session from JSON."""
+        body = await request.json()
+        json_str = json.dumps(body) if isinstance(body, dict) else body
+        from omagent.core.session import Session as SessionModel
+        session = SessionModel.import_json(json_str)
+        await store.save(session)
+        return {"session_id": session.id, "message_count": len(session.messages)}
+
+    @router.patch("/sessions/{session_id}")
+    async def update_session(session_id: str, request: Request):
+        """Update session metadata (pack_name)."""
+        from fastapi import HTTPException
+        session = await store.load(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        body = await request.json()
+        if "pack_name" in body:
+            session.pack_name = body["pack_name"]
+        await store.save(session)
+        return session.to_dict()
 
     @router.get("/health")
     async def health():
