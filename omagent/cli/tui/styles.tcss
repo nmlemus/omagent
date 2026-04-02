@@ -101,7 +101,7 @@ Footer {
     color: #ffe082;
     padding: 0 2;
     margin: 0 1;
-    height: 1;
+    height: auto;
 }
 
 /* === Step Progress === */
@@ -109,7 +109,7 @@ Footer {
     color: #9898a8;
     padding: 0 2;
     margin: 0 1;
-    height: 1;
+    height: auto;
 }
 
 /* === Status Bar === */
@@ -258,9 +258,11 @@ MarkdownTable {
 /* === Splash Screen === */
 SplashScreen {
     height: auto;
-    margin: 1 2;
+    margin: 0 1 1 1;
+    padding: 0;
 }
 
-#splash-logo {
-    text-align: center;
+/* ensure all direct children of ChatView size to content */
+ChatView > * {
+    height: auto;
 }

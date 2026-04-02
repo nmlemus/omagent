@@ -68,20 +68,32 @@ class OmagentApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        from omagent.cli.tui.widgets.splash import SplashScreen
         self._init_loop()
         self.query_one("#message-input", MessageInput).focus()
-        chat = self.query_one("#chat-view", ChatView)
-        splash = SplashScreen()
-        chat.mount(splash)
-        chat.add_system_message(
-            f"Pack: [#a8b4f0]{self.pack_name}[/] | "
-            f"Session: [#80cbc4]{self._agent_loop.session.id[:8]}…[/] | "
-            f"Model: [dim]{getattr(self._agent_loop.provider, 'model', 'unknown').split('/')[-1]}[/]\n"
-            f"[dim]/help for commands | Ctrl+E events | Ctrl+T sidebar[/]"
-        )
         self._update_sidebar()
         self._update_status_bar_meta()
+        self._mount_splash()
+
+    @work(thread=False)
+    async def _mount_splash(self) -> None:
+        from omagent.cli.tui.widgets.splash import SplashScreen
+        chat = self.query_one("#chat-view", ChatView)
+
+        # Load recent sessions
+        recent = []
+        if self._agent_loop.store:
+            try:
+                recent = await self._agent_loop.store.list_sessions(limit=5)
+            except Exception:
+                pass
+
+        splash = SplashScreen(
+            pack_name=self.pack_name,
+            model=getattr(self._agent_loop.provider, 'model', 'unknown'),
+            session_id=self._agent_loop.session.id,
+            recent_sessions=recent,
+        )
+        await chat.mount(splash)
 
     def _init_loop(self) -> None:
         self._agent_loop = self.loop_factory(self.pack_name, self._session_id)

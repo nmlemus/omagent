@@ -12,7 +12,7 @@ class ThinkingIndicator(Widget):
     """Animated spinner with phase label. Mounted/removed dynamically."""
 
     DEFAULT_CSS = """
-    ThinkingIndicator { height: 1; }
+    ThinkingIndicator { height: auto; }
     """
 
     def __init__(self, phase: str = "Thinking...", **kwargs):
