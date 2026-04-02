@@ -53,6 +53,21 @@ def _build_loop(pack_name: str, session_id: str | None = None):
 
     session.workspace_path = str(workspace.root)
 
+    # Inject workspace into tools that support it
+    for tool_name in registry.names():
+        tool = registry.get(tool_name)
+        if hasattr(tool, '_workspace') and tool._workspace is None:
+            tool._workspace = workspace
+
+    # Tell the LLM where to save artifacts
+    workspace_instruction = (
+        f"\n\n[Workspace]\n"
+        f"Save all generated files (charts, CSVs, reports, notebooks) to: {workspace.artifacts_dir}\n"
+        f"Example: plt.savefig('{workspace.artifacts_dir}/chart.png')\n"
+        f"Example: df.to_csv('{workspace.artifacts_dir}/cleaned_data.csv')\n"
+    )
+    system_prompt += workspace_instruction
+
     loop = AgentLoop(
         session=session,
         registry=registry,
@@ -192,6 +207,43 @@ def activity(when: str):
 
     import asyncio
     asyncio.run(_show())
+
+
+@cli.command()
+@click.argument("session_id", default="last")
+def replay(session_id: str):
+    """Replay a session — show rich timeline of what the agent did.
+
+    SESSION_ID can be a full or partial workspace ID, or 'last' for the most recent session.
+    """
+    from omagent.cli.replay import replay_session
+    from omagent.core.workspace import get_workspaces_dir
+    from rich.console import Console
+
+    console = Console()
+    ws_dir = get_workspaces_dir()
+
+    if not ws_dir.exists() or not any(ws_dir.iterdir()):
+        console.print("[red]No workspaces found.[/]")
+        console.print("[dim]Run a session first with 'omagent chat' or 'omagent run'.[/]")
+        return
+
+    if session_id == "last":
+        dirs = [d for d in ws_dir.iterdir() if d.is_dir()]
+        if not dirs:
+            console.print("[red]No workspaces found.[/]")
+            return
+        target = sorted(dirs, key=lambda d: d.stat().st_mtime, reverse=True)[0]
+    else:
+        matches = [d for d in ws_dir.iterdir() if d.is_dir() and d.name.startswith(session_id)]
+        if not matches:
+            console.print(f"[red]No workspace found for:[/] {session_id}")
+            console.print("[dim]Use 'omagent workspace list' to see available sessions.[/]")
+            return
+        target = matches[0]
+
+    events_path = target / "logs" / "events.jsonl"
+    replay_session(events_path, console)
 
 
 @cli.group()
