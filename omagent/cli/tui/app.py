@@ -304,7 +304,24 @@ class OmagentApp(App):
                 tokens_out=getattr(self._agent_loop.session, 'total_tokens_out', 0),
                 cost=getattr(self._agent_loop.session, 'total_cost', 0.0),
             )
+            # Update plan if available
+            self._update_plan_sidebar()
         except NoMatches:
+            pass
+
+    @work(thread=False)
+    async def _update_plan_sidebar(self) -> None:
+        """Load plan from store and update sidebar."""
+        if not hasattr(self._agent_loop, 'plan_store') or not self._agent_loop.plan_store:
+            return
+        try:
+            plan = await self._agent_loop.plan_store.load(self._agent_loop.session.id)
+            if plan:
+                plan_data = plan.to_dict()
+                plan_data["progress"] = plan.progress
+                sidebar = self.query_one("#sidebar", Sidebar)
+                sidebar.update_plan(plan_data)
+        except Exception:
             pass
 
     async def _handle_command(self, command: str) -> None:

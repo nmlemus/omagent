@@ -21,7 +21,8 @@ from omagent.providers.litellm_provider import LiteLLMProvider
 
 if TYPE_CHECKING:
     from omagent.core.journal import EventJournal
-    from omagent.core.memory import ConversationSummarizer
+    from omagent.core.memory import ConversationSummarizer, MemoryStore
+    from omagent.core.planner import PlanStore
     from omagent.core.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,8 @@ class AgentLoop:
         workspace: "Workspace | None" = None,
         journal: "EventJournal | None" = None,
         summarizer: "ConversationSummarizer | None" = None,
+        memory_store: "MemoryStore | None" = None,
+        plan_store: "PlanStore | None" = None,
     ):
         self.session = session
         self.registry = registry
@@ -72,6 +75,8 @@ class AgentLoop:
         self.workspace = workspace
         self.journal = journal
         self.summarizer = summarizer
+        self.memory_store = memory_store
+        self.plan_store = plan_store
         self.mcp_manager = None  # set after async MCP connection
 
     async def run(
@@ -85,6 +90,15 @@ class AgentLoop:
 
         if self.journal:
             self.journal.log_user_message(user_message)
+
+        # Inject existing memories into system prompt for session resume
+        if self.memory_store:
+            try:
+                ctx = await self.memory_store.get_context_injection(self.session.id)
+                if ctx:
+                    self.system_prompt = self.system_prompt + "\n\n" + ctx
+            except Exception:
+                pass
 
         _first_iteration = True
 
@@ -190,8 +204,22 @@ class AgentLoop:
                 except Exception as e:
                     logger.warning("tracker.log_llm_call failed: %s", e)
 
-            # --- If no tool calls, we're done ---
+            # --- If no tool calls, try to parse a plan from the text response ---
             if not tool_calls:
+                if self.plan_store and full_text:
+                    try:
+                        from omagent.core.planner import AgentPlan
+                        plan = AgentPlan.parse_from_text(full_text)
+                        if plan and len(plan.steps) >= 2:
+                            await self.plan_store.save(self.session.id, plan)
+                            if self.journal:
+                                self.journal.log("plan_created", {
+                                    "goal": plan.goal,
+                                    "total_steps": len(plan.steps),
+                                    "steps": [s.description for s in plan.steps],
+                                })
+                    except Exception:
+                        pass
                 if self.journal:
                     self.journal.log_session_end(
                         turns=iteration + 1,
@@ -242,6 +270,15 @@ class AgentLoop:
                             )
                         except Exception as e:
                             logger.warning("tracker.log_tool_call failed: %s", e)
+                    if self.plan_store:
+                        try:
+                            plan = await self.plan_store.load(self.session.id)
+                            if plan and plan.current_step:
+                                plan.start_step(plan.current_step, tool_name=tc.name)
+                                plan.complete_step(plan.current_step, result_summary=str(result.get("output", ""))[:100])
+                                await self.plan_store.save(self.session.id, plan)
+                        except Exception:
+                            pass
                     yield ToolResultEvent(
                         tool_use_id=tc.id,
                         tool_name=tc.name,
@@ -268,6 +305,15 @@ class AgentLoop:
                             )
                         except Exception as e:
                             logger.warning("tracker.log_tool_call failed: %s", e)
+                    if self.plan_store:
+                        try:
+                            plan = await self.plan_store.load(self.session.id)
+                            if plan and plan.current_step:
+                                plan.start_step(plan.current_step, tool_name=tc.name)
+                                plan.complete_step(plan.current_step, result_summary=str(result.get("output", ""))[:100])
+                                await self.plan_store.save(self.session.id, plan)
+                        except Exception:
+                            pass
                     yield ToolResultEvent(
                         tool_use_id=tc.id,
                         tool_name=tc.name,

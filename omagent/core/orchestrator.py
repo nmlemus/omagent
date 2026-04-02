@@ -23,8 +23,9 @@ class AgentOrchestrator:
     each using a different domain pack with a fresh session.
     """
 
-    def __init__(self, store: SessionStore | None = None):
+    def __init__(self, store: SessionStore | None = None, journal=None):
         self.store = store or SessionStore()
+        self.journal = journal
         self._active_agents: dict[str, AgentLoop] = {}
 
     async def spawn_agent(
@@ -45,6 +46,9 @@ class AgentOrchestrator:
             {"agent_id": str, "result": str, "is_error": bool}
         """
         agent_id = uuid.uuid4().hex[:12]
+
+        if self.journal:
+            self.journal.log_sub_agent_start(agent_id, pack_name, task)
 
         try:
             # Build sub-agent with the requested pack
@@ -95,6 +99,9 @@ class AgentOrchestrator:
 
             del self._active_agents[agent_id]
 
+            if self.journal:
+                self.journal.log_sub_agent_done(agent_id, pack_name, is_error=False)
+
             return {
                 "agent_id": agent_id,
                 "pack_name": pack_name,
@@ -105,6 +112,8 @@ class AgentOrchestrator:
         except Exception as e:
             logger.error("Sub-agent %s failed: %s", agent_id, e)
             self._active_agents.pop(agent_id, None)
+            if self.journal:
+                self.journal.log_sub_agent_done(agent_id, pack_name, is_error=True)
             return {
                 "agent_id": agent_id,
                 "pack_name": pack_name,

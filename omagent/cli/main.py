@@ -43,6 +43,9 @@ def _build_loop(pack_name: str, session_id: str | None = None):
     from omagent.core.workspace import Workspace
     from omagent.core.journal import EventJournal
     from omagent.core.memory import ConversationSummarizer, MemoryStore
+    from omagent.core.planner import PlanStore
+    from omagent.tools.builtin.remember import RememberTool
+    from omagent.tools.builtin.summarize import SummarizeTool
 
     sid = session_id or __import__("uuid").uuid4().hex
     session = Session(id=sid, pack_name=pack_name)
@@ -50,8 +53,16 @@ def _build_loop(pack_name: str, session_id: str | None = None):
     workspace = Workspace(sid)
     journal = EventJournal(sid, workspace.logs_dir)
     summarizer = ConversationSummarizer()
+    memory_store = MemoryStore()
+    plan_store = PlanStore()
 
     session.workspace_path = str(workspace.root)
+
+    # Register cross-cutting tools (transversal — available in ALL packs)
+    remember_tool = RememberTool(memory_store=memory_store, session_id=sid)
+    summarize_tool = SummarizeTool(summarizer=summarizer, session=session)
+    registry.register(remember_tool)
+    registry.register(summarize_tool)
 
     # Inject workspace into tools that support it
     for tool_name in registry.names():
@@ -80,6 +91,8 @@ def _build_loop(pack_name: str, session_id: str | None = None):
         workspace=workspace,
         journal=journal,
         summarizer=summarizer,
+        memory_store=memory_store,
+        plan_store=plan_store,
     )
     # Attach mcp_servers list so async callers can connect them
     loop._pending_mcp_servers = mcp_servers

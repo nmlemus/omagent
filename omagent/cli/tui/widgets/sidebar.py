@@ -1,13 +1,12 @@
 # omagent/cli/tui/widgets/sidebar.py
-"""Sidebar widget — session info and tool list."""
+"""Sidebar widget — session info, plan progress, and tool list."""
 from textual.app import ComposeResult
-from textual.widget import Widget
 from textual.widgets import Static
 from textual.containers import ScrollableContainer
 
 
 class Sidebar(ScrollableContainer):
-    """Right-hand sidebar showing session info and registered tools."""
+    """Right-hand sidebar showing session info, plan, and tools."""
 
     DEFAULT_CSS = """
     Sidebar {
@@ -19,20 +18,14 @@ class Sidebar(ScrollableContainer):
     def __init__(self, pack_name: str = "default", **kwargs):
         super().__init__(**kwargs)
         self.pack_name = pack_name
-        self._info_widget: Static | None = None
-        self._tools_widget: Static | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("[bold cyan]Session Info[/bold cyan]", classes="sidebar-title")
-        self._info_widget = Static("Loading…", classes="sidebar-value")
-        yield self._info_widget
-        yield Static("\n[bold cyan]Tools[/bold cyan]", classes="sidebar-title")
-        self._tools_widget = Static("Loading…", classes="sidebar-tool-item")
-        yield self._tools_widget
-
-    def on_mount(self) -> None:
-        self._info_widget = self.query_one(".sidebar-value", Static)
-        self._tools_widget = self.query_one(".sidebar-tool-item", Static)
+        yield Static("[bold #a8b4f0]Session Info[/]", classes="sidebar-title")
+        yield Static("Loading…", classes="sidebar-value", id="sidebar-info")
+        yield Static("\n[bold #a8b4f0]Plan[/]", classes="sidebar-title")
+        yield Static("[dim]No plan yet[/]", classes="sidebar-value", id="sidebar-plan")
+        yield Static("\n[bold #a8b4f0]Tools[/]", classes="sidebar-title")
+        yield Static("Loading…", classes="sidebar-tool-item", id="sidebar-tools")
 
     def update_info(
         self,
@@ -47,28 +40,61 @@ class Sidebar(ScrollableContainer):
         tokens_out: int = 0,
         cost: float = 0.0,
     ) -> None:
-        """Refresh sidebar content."""
         model_short = model.split("/")[-1] if "/" in model else model
 
         info_text = (
-            f"[dim]Session:[/dim]  {session_id}\n"
-            f"[dim]Pack:[/dim]     {pack_name}\n"
-            f"[dim]Model:[/dim]    {model_short}\n"
-            f"[dim]Turns:[/dim]    {turns}\n"
-            f"[dim]Tools:[/dim]    {tool_calls} calls\n"
-            f"[dim]Tokens:[/dim]   {tokens_in:,}/{tokens_out:,}\n"
-            f"[dim]Cost:[/dim]     ${cost:.4f}"
+            f"[dim]Session:[/]  {session_id}\n"
+            f"[dim]Pack:[/]     {pack_name}\n"
+            f"[dim]Model:[/]    {model_short}\n"
+            f"[dim]Turns:[/]    {turns}\n"
+            f"[dim]Tools:[/]    {tool_calls} calls\n"
+            f"[dim]Tokens:[/]   {tokens_in:,}/{tokens_out:,}\n"
+            f"[dim]Cost:[/]     ${cost:.4f}"
         )
         if workspace_path:
             ws_short = workspace_path.split("/")[-1][:16] + "\u2026"
-            info_text += f"\n[dim]Workspace:[/dim] {ws_short}"
+            info_text += f"\n[dim]Workspace:[/] {ws_short}"
 
-        tools_text = "\n".join(f"  [cyan]•[/cyan] {t}" for t in tools) or "[dim]none[/dim]"
+        tools_text = "\n".join(f"  [#80cbc4]\u2022[/] {t}" for t in tools) or "[dim]none[/]"
 
         try:
-            info_w = self.query(".sidebar-value")[0]
-            info_w.update(info_text)
-            tool_w = self.query(".sidebar-tool-item")[0]
-            tool_w.update(tools_text)
+            self.query_one("#sidebar-info", Static).update(info_text)
+            self.query_one("#sidebar-tools", Static).update(tools_text)
         except Exception:
             pass
+
+    def update_plan(self, plan_data: dict | None) -> None:
+        """Update the plan section with step checklist."""
+        try:
+            plan_widget = self.query_one("#sidebar-plan", Static)
+        except Exception:
+            return
+
+        if not plan_data or not plan_data.get("steps"):
+            plan_widget.update("[dim]No plan yet[/]")
+            return
+
+        lines = []
+        goal = plan_data.get("goal", "")
+        if goal:
+            lines.append(f"[bold]{goal[:40]}[/]")
+            lines.append("")
+
+        for step in plan_data["steps"]:
+            status = step.get("status", "pending")
+            desc = step.get("description", "")[:35]
+            if status == "completed":
+                icon = "[#a5d6a7]\u2713[/]"
+            elif status == "in_progress":
+                icon = "[#ffe082]\u25cb[/]"
+            elif status == "failed":
+                icon = "[#ef9a9a]\u2717[/]"
+            else:
+                icon = "[dim]\u25cb[/]"
+            lines.append(f"  {icon} {desc}")
+
+        progress = plan_data.get("progress", "")
+        if progress:
+            lines.append(f"\n[dim]Progress: {progress}[/]")
+
+        plan_widget.update("\n".join(lines))
