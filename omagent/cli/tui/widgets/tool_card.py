@@ -41,7 +41,7 @@ class ToolCard(Widget, can_focus=False):
         self.add_class("tool-card")
 
     def compose(self) -> ComposeResult:
-        # Header: toggle + tool name + spinner/duration
+        # Header: toggle + tool name + spinner/duration (uses markup)
         spinner = SPINNER_FRAMES[0]
         self._header_widget = Static(
             f"[bold #ffe082]{spinner}[/] [bold]{self.tool_name}[/]",
@@ -49,13 +49,13 @@ class ToolCard(Widget, can_focus=False):
         )
         yield self._header_widget
 
-        # Input section
-        input_display = self._format_input()
-        self._input_widget = Static(input_display, classes="tool-card-input")
+        # Input section — NO markup (code contains [ ] characters)
+        input_display = self._format_input_plain()
+        self._input_widget = Static(input_display, classes="tool-card-input", markup=False)
         yield self._input_widget
 
-        # Output section (initially empty, shows after result)
-        self._output_widget = Static("", classes="tool-card-output")
+        # Output section — NO markup (output contains [ ] characters)
+        self._output_widget = Static("", classes="tool-card-output", markup=False)
         yield self._output_widget
 
     def on_mount(self) -> None:
@@ -73,32 +73,37 @@ class ToolCard(Widget, can_focus=False):
                 f"[bold #ffe082]{frame}[/] [bold]{self.tool_name}[/] [dim italic]running...[/]"
             )
 
-    def _format_input(self) -> str:
-        """Format tool input. Special handling for Jupyter code."""
+    def _format_input_plain(self) -> str:
+        """Format tool input as plain text (no Rich markup — content has brackets)."""
         if self.tool_name in ("jupyter_execute",) and "code" in self.tool_input:
             code = self.tool_input["code"]
-            return f"[dim]Input:[/]\n[on #232340]```python\n{code}\n```[/]"
+            return f">>> Python:\n{code}"
 
         if self.tool_name == "bash" and "command" in self.tool_input:
-            cmd = self.tool_input["command"]
-            return f"[dim]Input:[/]\n[on #232340]$ {cmd}[/]"
+            return f"$ {self.tool_input['command']}"
 
         if self.tool_name == "read_file" and "path" in self.tool_input:
-            return f"[dim]Reading:[/] {self.tool_input['path']}"
+            return f"Reading: {self.tool_input['path']}"
 
         if self.tool_name == "write_file" and "path" in self.tool_input:
             content = self.tool_input.get("content", "")
-            preview = content[:200] + "…" if len(content) > 200 else content
-            return f"[dim]Writing:[/] {self.tool_input['path']}\n[on #232340]{preview}[/]"
+            preview = content[:300] + "…" if len(content) > 300 else content
+            return f"Writing: {self.tool_input['path']}\n{preview}"
 
         if self.tool_name == "sql_query" and "query" in self.tool_input:
-            return f"[dim]SQL:[/]\n[on #232340]{self.tool_input['query']}[/]"
+            return f"SQL:\n{self.tool_input['query']}"
+
+        if self.tool_name == "dataset_profile" and "path" in self.tool_input:
+            return f"Profiling: {self.tool_input['path']}"
+
+        if self.tool_name == "list_dir":
+            return f"Listing: {self.tool_input.get('path', '.')}"
 
         # Generic: show JSON
         formatted = json.dumps(self.tool_input, indent=2)
         if len(formatted) > 500:
             formatted = formatted[:500] + "\n…"
-        return f"[dim]Input:[/]\n{formatted}"
+        return formatted
 
     def set_result(self, result: dict, is_error: bool = False, duration_ms: int | None = None) -> None:
         """Update the card with the tool result."""
@@ -127,25 +132,24 @@ class ToolCard(Widget, can_focus=False):
             self._output_widget.update(output_text)
 
     def _format_output(self, result: dict) -> str:
-        """Format tool result for display."""
+        """Format tool result as plain text (no Rich markup)."""
         parts = []
 
         # Show stdout
         stdout = result.get("stdout", "")
         if stdout:
-            parts.append(f"[dim]stdout:[/]\n{stdout[:1000]}")
+            parts.append(f"stdout:\n{stdout[:1000]}")
 
         # Show stderr
         stderr = result.get("stderr", "")
         if stderr:
-            parts.append(f"[#ef9a9a]stderr:[/]\n{stderr[:500]}")
+            parts.append(f"stderr:\n{stderr[:500]}")
 
         # Show output
         output = result.get("output", "")
         if output and isinstance(output, str):
-            parts.append(f"[dim]Output:[/] {output[:500]}")
+            parts.append(f"Output: {output[:500]}")
         elif output and isinstance(output, list):
-            # Dataset/list results
             for item in output[:10]:
                 if isinstance(item, dict):
                     parts.append(json.dumps(item))
@@ -159,28 +163,27 @@ class ToolCard(Widget, can_focus=False):
                 if "text" in out:
                     parts.append(out["text"])
                 if "image_base64" in out:
-                    parts.append("[dim][image output — saved to file][/]")
+                    parts.append("[image saved to workspace]")
                 if "html" in out:
-                    parts.append("[dim][HTML output][/]")
+                    parts.append("[HTML output]")
 
         # Show error
         error = result.get("error", "")
         if error:
             if isinstance(error, dict):
-                # Jupyter error with traceback
-                tb = "\n".join(error.get("traceback", []))
-                parts.append(f"[#ef9a9a]{error.get('ename', 'Error')}: {error.get('evalue', '')}\n{tb}[/]")
+                tb = "\n".join(str(line) for line in error.get("traceback", []))
+                parts.append(f"ERROR: {error.get('ename', 'Error')}: {error.get('evalue', '')}\n{tb}")
             elif isinstance(error, str):
-                parts.append(f"[#ef9a9a]{error}[/]")
+                parts.append(f"ERROR: {error}")
 
-        # Show metrics (for model_train, dataset_profile, etc.)
+        # Show metrics
         metrics = result.get("metrics", {})
         if metrics:
-            parts.append("[dim]Metrics:[/]")
+            parts.append("Metrics:")
             for k, v in metrics.items():
                 parts.append(f"  {k}: {v}")
 
-        return "\n".join(parts) if parts else "[dim]No output[/]"
+        return "\n".join(parts) if parts else "No output"
 
     def on_click(self) -> None:
         """Toggle expanded/collapsed."""
