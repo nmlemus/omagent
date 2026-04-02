@@ -83,18 +83,28 @@ def cli():
 @cli.command()
 @click.option("--pack", default=None, envvar="OMAGENT_PACK", help="Domain pack name")
 @click.option("--session", "session_id", default=None, help="Resume a session by ID")
-def chat(pack: str | None, session_id: str | None):
-    """Start an interactive multi-turn chat session."""
-    from omagent.cli.repl import run_repl
-
+@click.option("--classic", is_flag=True, default=False, help="Use classic REPL instead of TUI")
+def chat(pack: str | None, session_id: str | None, classic: bool):
+    """Start an interactive multi-turn chat session (TUI by default)."""
     pack_name = pack or os.getenv("OMAGENT_PACK", "default")
 
-    async def loop_factory_async(sid=None):
-        loop = _build_loop(pack_name, sid or session_id)
-        await _connect_mcp(loop)
-        return loop
+    if classic:
+        from omagent.cli.repl import run_repl
 
-    asyncio.run(run_repl(loop_factory_async, pack_name=pack_name))
+        async def loop_factory_async(sid=None):
+            loop = _build_loop(pack_name, sid or session_id)
+            await _connect_mcp(loop)
+            return loop
+
+        asyncio.run(run_repl(loop_factory_async, pack_name=pack_name))
+    else:
+        from omagent.cli.tui.app import OmagentApp
+
+        def loop_factory(pn=None, sid=None):
+            return _build_loop(pn or pack_name, sid or session_id)
+
+        app = OmagentApp(loop_factory=loop_factory, pack_name=pack_name, session_id=session_id)
+        app.run()
 
 
 @cli.command()
