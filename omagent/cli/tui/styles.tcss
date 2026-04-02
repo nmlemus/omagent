@@ -38,7 +38,6 @@ Footer {
 
 .message-card-user {
     border-left: thick #a8b4f0;
-    margin-left: 2;
 }
 
 .message-card-assistant {
