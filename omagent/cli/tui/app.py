@@ -221,6 +221,15 @@ class OmagentApp(App):
                     if activity:
                         elapsed = time.monotonic() - turn_start
                         activity.add_entry(f"Turn {self._turn_count} complete ({elapsed:.1f}s)")
+                    try:
+                        bar = self.query_one("#status-bar", StatusBar)
+                        bar.set_tokens(
+                            getattr(self._agent_loop.session, 'total_tokens_in', 0),
+                            getattr(self._agent_loop.session, 'total_tokens_out', 0),
+                        )
+                        bar.set_cost(getattr(self._agent_loop.session, 'total_cost', 0.0))
+                    except NoMatches:
+                        pass
 
         except Exception as e:
             chat.add_error_message(f"Error: {e}")
@@ -271,6 +280,10 @@ class OmagentApp(App):
                 turns=self._turn_count,
                 tool_calls=self._tool_calls_count,
                 tools=self._agent_loop.registry.names(),
+                workspace_path=getattr(self._agent_loop.session, 'workspace_path', None),
+                tokens_in=getattr(self._agent_loop.session, 'total_tokens_in', 0),
+                tokens_out=getattr(self._agent_loop.session, 'total_tokens_out', 0),
+                cost=getattr(self._agent_loop.session, 'total_cost', 0.0),
             )
         except NoMatches:
             pass

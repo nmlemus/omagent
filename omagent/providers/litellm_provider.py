@@ -21,6 +21,11 @@ class LiteLLMProvider:
 
     def __init__(self, model: str | None = None):
         self.model = model or get_model()
+        self._last_usage: dict | None = None
+
+    @property
+    def last_usage(self) -> dict | None:
+        return self._last_usage
 
     async def stream(
         self,
@@ -61,6 +66,7 @@ class LiteLLMProvider:
                 messages=full_messages,
                 tools=litellm_tools,
                 stream=True,
+                stream_options={"include_usage": True},
                 **kwargs,
             )
 
@@ -68,8 +74,10 @@ class LiteLLMProvider:
             current_text = ""
             # tool_calls_acc: dict[index -> {id, name, arguments}]
             tool_calls_acc: dict[int, dict] = {}
+            last_chunk = None
 
             async for chunk in response:
+                last_chunk = chunk
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if delta is None:
                     continue
@@ -96,6 +104,19 @@ class LiteLLMProvider:
                             acc["name"] += tc_delta.function.name
                         if tc_delta.function and tc_delta.function.arguments:
                             acc["arguments"] += tc_delta.function.arguments
+
+            # Extract usage from last chunk
+            self._last_usage = None
+            if last_chunk:
+                try:
+                    usage = getattr(last_chunk, "usage", None)
+                    if usage:
+                        self._last_usage = {
+                            "tokens_in": getattr(usage, "prompt_tokens", None),
+                            "tokens_out": getattr(usage, "completion_tokens", None),
+                        }
+                except Exception:
+                    pass
 
             # Emit complete tool calls
             for idx in sorted(tool_calls_acc.keys()):
