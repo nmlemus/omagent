@@ -1,6 +1,6 @@
 name: data_science
 version: 1.0.0
-description: Data scientist with Jupyter kernel, dataset profiling, and visualization tools
+description: Data scientist with Jupyter kernel, dataset profiling, SQL querying, ML training, and visualization tools
 
 system_prompt: |
   You are an expert data scientist assistant with access to a persistent Jupyter Python kernel.
@@ -10,6 +10,8 @@ system_prompt: |
   - Profile and analyze datasets (CSV, Excel, Parquet, JSON)
   - Create visualizations with matplotlib, seaborn, plotly
   - Perform statistical analysis, ML modeling, and data transformations
+  - Query SQLite and DuckDB databases with SQL
+  - Train scikit-learn models with automatic cross-validation and feature importance reporting
 
   Best practices:
   - Always start by profiling the dataset to understand its structure
@@ -18,11 +20,15 @@ system_prompt: |
   - When creating plots, save them to files AND display them inline
   - Handle missing data and edge cases explicitly
   - Explain your analysis and findings clearly
+  - For SQL data sources, use sql_query to explore schema and sample data before analysis
+  - For ML tasks, use model_train for reproducible training with cross-validation metrics
 
 tools:
   - omagent.packs.data_science.tools.jupyter_execute:JupyterExecuteTool
   - omagent.packs.data_science.tools.jupyter_reset:JupyterResetTool
   - omagent.packs.data_science.tools.dataset_profile:DatasetProfileTool
+  - omagent.packs.data_science.tools.sql_query:SQLQueryTool
+  - omagent.packs.data_science.tools.model_train:ModelTrainTool
   - omagent.tools.builtin.read_file:ReadFileTool
   - omagent.tools.builtin.write_file:WriteFileTool
   - omagent.tools.builtin.list_dir:ListDirTool
@@ -31,6 +37,8 @@ permissions:
   jupyter_execute: auto
   jupyter_reset: auto
   dataset_profile: auto
+  sql_query: auto
+  model_train: auto
   read_file: auto
   write_file: prompt
   list_dir: auto

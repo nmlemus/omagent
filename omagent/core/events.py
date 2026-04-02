@@ -11,6 +11,8 @@ class EventType(str, Enum):
     PERMISSION_PROMPT = "permission_prompt"
     ERROR = "error"
     DONE = "done"
+    SUB_AGENT_START = "sub_agent_start"
+    SUB_AGENT_DONE = "sub_agent_done"
 
 
 @dataclass
@@ -61,6 +63,23 @@ class DoneEvent:
     type: EventType = field(default=EventType.DONE, init=False)
 
 
+@dataclass
+class SubAgentStartEvent:
+    type: EventType = field(default=EventType.SUB_AGENT_START, init=False)
+    agent_id: str = ""
+    pack_name: str = ""
+    task: str = ""
+
+
+@dataclass
+class SubAgentDoneEvent:
+    type: EventType = field(default=EventType.SUB_AGENT_DONE, init=False)
+    agent_id: str = ""
+    pack_name: str = ""
+    result: str = ""
+    is_error: bool = False
+
+
 AgentEvent = (
     TextDeltaEvent
     | ToolCallEvent
@@ -69,4 +88,6 @@ AgentEvent = (
     | PermissionPromptEvent
     | ErrorEvent
     | DoneEvent
+    | SubAgentStartEvent
+    | SubAgentDoneEvent
 )
