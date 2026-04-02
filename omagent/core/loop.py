@@ -158,11 +158,19 @@ class AgentLoop:
                 tool_calls=assistant_msg.get("tool_calls"),
             )
 
+            # --- Extract token usage ---
+            _usage = getattr(self.provider, "_last_usage", None)
+            _tokens_in = _usage.get("tokens_in") if _usage else None
+            _tokens_out = _usage.get("tokens_out") if _usage else None
+
+            # Update session cumulative metrics
+            if _tokens_in:
+                self.session.total_tokens_in += _tokens_in
+            if _tokens_out:
+                self.session.total_tokens_out += _tokens_out
+
             # --- Journal LLM response ---
             if self.journal:
-                _usage = getattr(self.provider, "_last_usage", None)
-                _tokens_in = _usage.get("tokens_in") if _usage else None
-                _tokens_out = _usage.get("tokens_out") if _usage else None
                 self.journal.log_llm_response(
                     tokens_in=_tokens_in,
                     tokens_out=_tokens_out,
