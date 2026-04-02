@@ -99,6 +99,16 @@ class ChatView(ScrollableContainer, can_focus=True):
         self.mount(card)
         self._scroll_to_bottom()
 
+    def add_round_separator(self, round_num: int) -> None:
+        """Add a visual separator between rounds."""
+        from textual.widgets import Static
+        widget = Static(
+            f"[#3a3a50]{'─' * 20}[/] [bold #a8b4f0]Round {round_num}[/] [#3a3a50]{'─' * 30}[/]",
+            classes="round-separator",
+        )
+        self.mount(widget)
+        self._scroll_to_bottom()
+
     def add_step_progress(self, step: int, total: int | None, description: str) -> None:
         """Show step progress indicator."""
         from textual.widgets import Static

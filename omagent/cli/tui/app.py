@@ -138,6 +138,7 @@ class OmagentApp(App):
         assistant_text = ""
         tool_calls_this_turn = 0
         current_tool_card = None
+        round_count = 0
         turn_start = time.monotonic()
 
         # Show thinking immediately
@@ -149,102 +150,120 @@ class OmagentApp(App):
         # Start elapsed timer
         elapsed_timer = self.set_interval(0.5, lambda: self._update_elapsed(turn_start))
 
+        def _update_live_metrics():
+            """Push real-time metrics to status bar and sidebar."""
+            try:
+                bar = self.query_one("#status-bar", StatusBar)
+                bar.set_tokens(
+                    getattr(self._agent_loop.session, 'total_tokens_in', 0),
+                    getattr(self._agent_loop.session, 'total_tokens_out', 0),
+                )
+                bar.set_cost(getattr(self._agent_loop.session, 'total_cost', 0.0))
+                bar.set_turns(round_count)
+            except NoMatches:
+                pass
+
         try:
             async for event in self._agent_loop.run(message):
                 if isinstance(event, TextDeltaEvent):
                     if not assistant_text:
+                        # New round of text — show round separator
+                        round_count += 1
                         chat.hide_thinking()
+                        chat.add_round_separator(round_count)
                         chat.start_assistant_stream()
+                        self._update_status(f"R{round_count} generating...")
+                        _update_live_metrics()
+                        if activity:
+                            activity.add_entry(f"Round {round_count} — LLM streaming")
                     assistant_text += event.content
                     chat.update_assistant_stream(assistant_text)
-                    self._update_status("generating...")
 
                 elif isinstance(event, ToolCallEvent):
                     tool_calls_this_turn += 1
                     self._tool_calls_count += 1
 
-                    # If there was streaming text, finalize it before the tool card
+                    # Finalize any streaming text before showing tool card
                     if assistant_text:
                         await chat.finalize_assistant_message(assistant_text)
                         assistant_text = ""
 
                     chat.hide_thinking()
-                    chat.add_step_progress(tool_calls_this_turn, None, event.name)
                     current_tool_card = chat.add_tool_call(event.name, event.input)
                     chat.show_thinking(f"Running {event.name}...")
-                    self._update_status(f"tool: {event.name}")
+                    self._update_status(f"R{round_count} ⚡ {event.name}")
+                    _update_live_metrics()
 
                     if activity:
-                        activity.add_entry(f"Tool call: {event.name}")
+                        activity.add_entry(f"⚡ {event.name}")
 
                 elif isinstance(event, ToolResultEvent):
                     chat.hide_thinking()
                     chat.update_tool_result(current_tool_card, event.result, event.is_error)
-                    self._update_status("processing...")
+                    self._update_status(f"R{round_count} processing...")
+                    _update_live_metrics()
 
                     if activity:
-                        status = "error" if event.is_error else "ok"
-                        activity.add_entry(f"Tool result: {event.tool_name} ({status})")
+                        status = "❌" if event.is_error else "✓"
+                        dur = event.result.get("duration_ms") if isinstance(event.result, dict) else None
+                        dur_str = f" ({dur}ms)" if dur else ""
+                        activity.add_entry(f"{status} {event.tool_name}{dur_str}")
 
                 elif isinstance(event, PermissionPromptEvent):
-                    chat.add_system_message(f"[#ffe082]Permission needed:[/] `{event.tool_name}`")
+                    chat.add_system_message(f"[#ffe082]⚠ Permission needed:[/] `{event.tool_name}`")
                     if activity:
-                        activity.add_entry(f"Permission prompt: {event.tool_name}")
+                        activity.add_entry(f"⚠ Permission: {event.tool_name}")
 
                 elif isinstance(event, PermissionDeniedEvent):
                     chat.add_error_message(f"Permission denied: {event.tool_name}")
                     if activity:
-                        activity.add_entry(f"Permission denied: {event.tool_name}")
+                        activity.add_entry(f"✗ Denied: {event.tool_name}")
 
                 elif isinstance(event, ErrorEvent):
                     chat.add_error_message(event.message)
                     if activity:
-                        activity.add_entry(f"Error: {event.message[:80]}")
+                        activity.add_entry(f"❌ {event.message[:80]}")
 
                 elif isinstance(event, SubAgentStartEvent):
                     chat.add_system_message(
-                        f"[#ce93d8]Sub-agent started:[/] `{event.pack_name}` — {event.task[:100]}"
+                        f"[#ce93d8]→ Sub-agent:[/] `{event.pack_name}` — {event.task[:100]}"
                     )
                     if activity:
-                        activity.add_entry(f"Sub-agent: {event.pack_name}")
+                        activity.add_entry(f"→ Sub-agent: {event.pack_name}")
 
                 elif isinstance(event, SubAgentDoneEvent):
-                    chat.add_system_message(f"[#a5d6a7]Sub-agent done:[/] `{event.pack_name}`")
+                    chat.add_system_message(f"[#a5d6a7]← Sub-agent done:[/] `{event.pack_name}`")
                     if activity:
-                        activity.add_entry(f"Sub-agent done: {event.pack_name}")
+                        activity.add_entry(f"← Sub-agent done: {event.pack_name}")
 
                 elif isinstance(event, DoneEvent):
                     if assistant_text:
                         await chat.finalize_assistant_message(assistant_text)
                         assistant_text = ""
                     self._turn_count += 1
+                    _update_live_metrics()
                     if activity:
                         elapsed = time.monotonic() - turn_start
-                        activity.add_entry(f"Turn {self._turn_count} complete ({elapsed:.1f}s)")
-                    try:
-                        bar = self.query_one("#status-bar", StatusBar)
-                        bar.set_tokens(
-                            getattr(self._agent_loop.session, 'total_tokens_in', 0),
-                            getattr(self._agent_loop.session, 'total_tokens_out', 0),
+                        activity.add_entry(
+                            f"Done — {round_count} rounds, "
+                            f"{self._agent_loop.session.total_tokens_in:,}/"
+                            f"{self._agent_loop.session.total_tokens_out:,} tok "
+                            f"({elapsed:.1f}s)"
                         )
-                        bar.set_cost(getattr(self._agent_loop.session, 'total_cost', 0.0))
-                    except NoMatches:
-                        pass
 
         except Exception as e:
             chat.add_error_message(f"Error: {e}")
             if activity:
-                activity.add_entry(f"Error: {e}")
+                activity.add_entry(f"❌ {e}")
         finally:
             chat.hide_thinking()
             elapsed_timer.stop()
             self._is_processing = False
             self._update_status("ready")
 
-            # Update status bar metrics
             try:
                 bar = self.query_one("#status-bar", StatusBar)
-                bar.set_turns(self._turn_count)
+                bar.set_turns(round_count)
                 bar.clear_elapsed()
             except NoMatches:
                 pass

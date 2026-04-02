@@ -103,6 +103,13 @@ Footer {
     height: auto;
 }
 
+/* === Round Separator === */
+.round-separator {
+    height: 1;
+    color: #a8b4f0;
+    margin: 1 1 0 1;
+}
+
 /* === Step Progress === */
 .step-progress {
     color: #9898a8;
