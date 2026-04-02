@@ -6,7 +6,7 @@ from textual.widget import Widget
 from textual.widgets import Static, Markdown
 
 
-class MessageCard(Widget):
+class MessageCard(Widget, can_focus=False):
     """A single message in the chat. Renders differently based on role."""
 
     DEFAULT_CSS = """

@@ -12,7 +12,7 @@ from textual.reactive import reactive
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
-class ToolCard(Widget):
+class ToolCard(Widget, can_focus=False):
     """Expandable card showing tool name, input, spinner, output, duration."""
 
     DEFAULT_CSS = """

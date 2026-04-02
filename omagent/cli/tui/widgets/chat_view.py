@@ -10,11 +10,11 @@ from omagent.cli.tui.widgets.tool_card import ToolCard
 from omagent.cli.tui.widgets.thinking_indicator import ThinkingIndicator
 
 
-class ChatView(ScrollableContainer):
+class ChatView(ScrollableContainer, can_focus=True):
     """Scrollable container rendering chat with MessageCards and ToolCards."""
 
     DEFAULT_CSS = """
-    ChatView { height: 1fr; overflow-y: auto; }
+    ChatView { height: 1fr; overflow-y: scroll; }
     """
 
     def __init__(self, **kwargs):
