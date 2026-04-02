@@ -20,7 +20,6 @@ class MessageCard(Widget):
         self.timestamp = datetime.now().strftime("%H:%M:%S")
         self._label_widget: Static | None = None
         self._content_widget: Static | None = None
-        self._finalized = False
 
     def compose(self) -> ComposeResult:
         role_labels = {
@@ -36,7 +35,7 @@ class MessageCard(Widget):
         yield self._label_widget
 
         # Always use Static for initial render (streaming compatible)
-        self._content_widget = Static(self.content, classes="message-content")
+        self._content_widget = Static(self.content, classes="message-content", id="msg-content")
         yield self._content_widget
 
         self.add_class(f"message-card-{self.role}")
@@ -49,15 +48,22 @@ class MessageCard(Widget):
             self._content_widget.update(new_content)
 
     async def finalize_with_markdown(self, content: str) -> None:
-        """Replace Static with Markdown widget for final rendered content."""
+        """Replace Static content with rendered Markdown widget."""
         self.content = content
-        if self._content_widget is not None and self.role == "assistant":
-            try:
-                md_widget = Markdown(content, classes="message-content-md")
-                await self._content_widget.mount_after(md_widget)
+        if self.role != "assistant":
+            if self._content_widget:
+                self._content_widget.update(content)
+            return
+
+        try:
+            # Create markdown widget and mount it in this card
+            md_widget = Markdown(content, classes="message-content-md")
+            await self.mount(md_widget)
+            # Remove the old static content
+            if self._content_widget is not None:
                 self._content_widget.remove()
                 self._content_widget = None
-                self._finalized = True
-            except Exception:
-                # Fallback: just update the static
+        except Exception:
+            # Fallback: just update the static
+            if self._content_widget is not None:
                 self._content_widget.update(content)
