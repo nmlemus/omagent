@@ -32,12 +32,15 @@ def test_plan_auto_complete():
 
 
 def test_parse_from_text():
-    text = """Here's my approach to analyze the data:
+    text = """I'll analyze the data now.
 
+<plan>
+Goal: Analyze sales data
 1. Load the dataset from sales.csv
 2. Check for missing values and clean the data
 3. Generate summary statistics
 4. Create visualizations for key metrics
+</plan>
 """
     plan = AgentPlan.parse_from_text(text)
     assert plan is not None

@@ -119,67 +119,30 @@ class AgentPlan:
 
     @classmethod
     def parse_from_text(cls, text: str) -> "AgentPlan | None":
-        """Try to extract an ACTION plan from LLM response text.
+        """Parse a plan from <plan> tags in LLM output.
 
-        Only matches plans that describe actions to be taken (verbs),
-        not summaries, recommendations, or data listings.
-
-        Looks for patterns like:
-        1. Load the dataset
-        2. Clean missing values
-        3. Generate visualizations
+        Pack-agnostic — works for any domain. The agent is instructed
+        to wrap plans in <plan> tags via the system prompt.
         """
-        # Must contain plan-like keywords near a numbered list
-        plan_indicators = re.search(
-            r'(?:plan|approach|steps?|strategy|will|let me|going to|here\'s what|i\'ll|voy a|pasos|plan de)',
-            text, re.IGNORECASE
-        )
-        if not plan_indicators:
+        match = re.search(r'<plan>\s*(.*?)\s*</plan>', text, re.DOTALL)
+        if not match:
             return None
 
-        # Look for numbered lists (at least 3 items for a real plan)
-        pattern = r'(?:^|\n)\s*(\d+)[.)]\s+(.+?)(?=\n\s*\d+[.)]|\n\n|\Z)'
-        matches = re.findall(pattern, text, re.DOTALL)
+        plan_text = match.group(1)
 
-        if len(matches) < 3:
+        # Extract goal
+        goal_match = re.search(r'(?:Goal|Objective|Plan):\s*(.+?)(?:\n|$)', plan_text, re.IGNORECASE)
+        goal = goal_match.group(1).strip() if goal_match else "Agent plan"
+
+        # Extract numbered steps
+        steps = re.findall(r'\d+[.)]\s+(.+?)(?=\n\s*\d+[.)]|\Z)', plan_text, re.DOTALL)
+
+        if len(steps) < 2:
             return None
-
-        # Filter: steps must look like actions (start with verb-like words), not data/results
-        action_words = re.compile(
-            r'^(?:load|read|clean|analyz|creat|generat|build|train|evaluat|check|run|install|'
-            r'set|configur|implement|deploy|test|export|import|profil|visualiz|plot|merge|'
-            r'cargar|limpiar|analizar|crear|generar|construir|entrenar|evaluar|verificar|'
-            r'first|then|next|finally|start|begin|prepare|process|extract|transform|'
-            r'identify|compar|calculat|comput|determin|investigat|explor|review)',
-            re.IGNORECASE
-        )
-
-        action_steps = []
-        for num, desc in matches:
-            desc_clean = desc.strip()
-            # Skip steps that look like data listings (contain currency, bold labels with values)
-            if re.search(r'R?\$\s*[\d,]+|^\*\*[^*]+\*\*:\s*[~R$\d]|^`[^`]+`:', desc_clean):
-                continue
-            # Check if starts with an action word (after removing markdown bold)
-            desc_no_bold = re.sub(r'\*\*([^*]+)\*\*', r'\1', desc_clean)
-            first_word = desc_no_bold.split()[0] if desc_no_bold.split() else ""
-            if action_words.match(first_word) or action_words.match(desc_no_bold):
-                action_steps.append(desc_clean)
-
-        if len(action_steps) < 3:
-            return None
-
-        # Find goal
-        goal_match = re.search(
-            r'(?:plan|approach|steps?|strategy)[:\s]*(.+?)(?:\n\s*1[.)])',
-            text, re.IGNORECASE
-        )
-        goal = goal_match.group(1).strip() if goal_match else "Analysis plan"
 
         plan = cls(goal=goal)
-        for desc in action_steps:
-            plan.add_step(desc)
-
+        for desc in steps:
+            plan.add_step(desc.strip())
         return plan
 
 

@@ -28,7 +28,8 @@ def _build_loop(pack_name: str, session_id: str | None = None):
     mcp_servers = []
 
     # Try to load domain pack if available
-    skills_loaded = []
+    from omagent.core.skill_loader import SkillRegistry, parse_skill_md
+    skill_registry = SkillRegistry()
     try:
         from omagent.packs.loader import DomainPackLoader
         loader = DomainPackLoader()
@@ -38,16 +39,31 @@ def _build_loop(pack_name: str, session_id: str | None = None):
         policy.load_pack_permissions(pack.permissions)
         mcp_servers = pack.mcp_servers
 
-        # Inject skill content into system prompt
-        for skill_path in pack.skills:
-            try:
-                skill_content = skill_path.read_text(encoding="utf-8")
-                system_prompt += f"\n\n[Skill: {skill_path.stem}]\n{skill_content}"
-                skills_loaded.append(skill_path.stem)
-            except Exception:
-                pass
+        # Register pack skills with the skill registry
+        if hasattr(pack, 'skills') and pack.skills:
+            for skill_path in pack.skills:
+                if skill_path.is_dir():
+                    skill_registry.discover([skill_path])
+                elif skill_path.is_file():
+                    # Backward compat: plain .md file
+                    skill = parse_skill_md(skill_path)
+                    if skill:
+                        skill_registry.register(skill)
     except Exception:
         system_prompt = f"You are a helpful AI assistant. Pack: {pack_name}."
+
+    # Also discover from standard user paths
+    skill_registry.discover([
+        Path.cwd() / ".omagent" / "skills",
+        Path.home() / ".omagent" / "skills",
+    ])
+
+    # Add Level 1 metadata to system prompt
+    metadata_prompt = skill_registry.get_metadata_prompt()
+    if metadata_prompt:
+        system_prompt += f"\n\n{metadata_prompt}"
+
+    skills_loaded = skill_registry.names()
 
     from omagent.core.tracker import ActivityTracker
     from omagent.core.workspace import Workspace
@@ -112,6 +128,7 @@ def _build_loop(pack_name: str, session_id: str | None = None):
         summarizer=summarizer,
         memory_store=memory_store,
         plan_store=plan_store,
+        skill_registry=skill_registry,
     )
     # Attach mcp_servers list so async callers can connect them
     loop._pending_mcp_servers = mcp_servers

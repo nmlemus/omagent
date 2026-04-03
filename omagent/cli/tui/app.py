@@ -98,6 +98,7 @@ class OmagentApp(App):
     def _init_loop(self) -> None:
         self._agent_loop = self.loop_factory(self.pack_name, self._session_id)
         self._session_id = self._agent_loop.session.id
+        self._skill_registry = getattr(self._agent_loop, 'skill_registry', None)
 
     def _update_status_bar_meta(self) -> None:
         """Set static status bar info (model, pack)."""
@@ -330,7 +331,7 @@ class OmagentApp(App):
         cmd = parts[0].lower()
 
         if cmd == "/help":
-            chat.add_system_message(
+            help_text = (
                 "[bold]Commands:[/]\n"
                 "  [#a8b4f0]/help[/]           — Show this help\n"
                 "  [#a8b4f0]/tools[/]          — List available tools\n"
@@ -342,6 +343,13 @@ class OmagentApp(App):
                 "  [#a8b4f0]/quit[/]           — Exit\n\n"
                 "[dim]Shortcuts:[/] Ctrl+N New | Ctrl+T Sidebar | Ctrl+E Events | Ctrl+Q Quit"
             )
+            if hasattr(self, '_skill_registry') and self._skill_registry:
+                invocable = self._skill_registry.get_user_invocable()
+                if invocable:
+                    help_text += "\n\n[bold]Skills:[/]\n"
+                    for s in invocable:
+                        help_text += f"  [#a8b4f0]/{s.name}[/] — {s.description[:50]}\n"
+            chat.add_system_message(help_text)
         elif cmd == "/tools":
             schemas = self._agent_loop.registry.get_schemas()
             if schemas:
@@ -389,6 +397,21 @@ class OmagentApp(App):
         elif cmd == "/quit":
             self.exit()
         else:
+            # Check if it's a skill command
+            activity = self._get_activity_log()
+            if hasattr(self, '_skill_registry') and self._skill_registry:
+                skill = self._skill_registry.get_by_name(cmd.lstrip("/"))
+                if skill and skill.user_invocable:
+                    instructions = self._skill_registry.load_full(skill.name)
+                    if instructions:
+                        chat.add_system_message(f"[#a8b4f0]Loaded skill:[/] `{skill.name}` — {skill.description[:60]}")
+                        # Inject into the loop's system prompt
+                        if skill.name not in self._agent_loop._injected_skills:
+                            self._agent_loop._injected_skills.add(skill.name)
+                            self._agent_loop.system_prompt += f"\n\n[Skill: {skill.name}]\n{instructions}"
+                        if activity:
+                            activity.add_entry(f"Skill loaded: {skill.name}")
+                    return
             chat.add_system_message(f"[#ef9a9a]Unknown command:[/] {cmd}. Type [bold]/help[/]")
 
     def action_new_session(self) -> None:

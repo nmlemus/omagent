@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from omagent.core.memory import ConversationSummarizer, MemoryStore
     from omagent.core.planner import PlanStore
     from omagent.core.workspace import Workspace
+    from omagent.core.skill_loader import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ class AgentLoop:
         summarizer: "ConversationSummarizer | None" = None,
         memory_store: "MemoryStore | None" = None,
         plan_store: "PlanStore | None" = None,
+        skill_registry: "SkillRegistry | None" = None,
     ):
         self.session = session
         self.registry = registry
@@ -77,6 +79,8 @@ class AgentLoop:
         self.summarizer = summarizer
         self.memory_store = memory_store
         self.plan_store = plan_store
+        self.skill_registry = skill_registry
+        self._injected_skills: set[str] = set()
         self.mcp_manager = None  # set after async MCP connection
 
     async def run(
@@ -99,6 +103,21 @@ class AgentLoop:
                     self.system_prompt = self.system_prompt + "\n\n" + ctx
             except Exception:
                 pass
+
+        # Inject matched skills into system prompt (progressive loading)
+        if self.skill_registry:
+            matched = self.skill_registry.match_triggers(user_message)
+            for skill in matched:
+                if skill.name not in self._injected_skills:
+                    self._injected_skills.add(skill.name)
+                    instructions = self.skill_registry.load_full(skill.name)
+                    if instructions:
+                        self.system_prompt += f"\n\n[Skill: {skill.name}]\n{instructions}"
+                        if self.journal:
+                            self.journal.log("skill_loaded", {
+                                "skill_name": skill.name,
+                                "triggers_matched": [t for t in skill.triggers if t in user_message.lower()],
+                            })
 
         _first_iteration = True
 
