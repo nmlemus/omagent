@@ -29,6 +29,7 @@ class OmagentApp(App):
     SUB_TITLE = "Oh My Agent"
 
     BINDINGS = [
+        Binding("ctrl+c", "stop_agent", "Stop"),
         Binding("ctrl+n", "new_session", "New Session"),
         Binding("ctrl+t", "toggle_sidebar", "Sidebar"),
         Binding("ctrl+e", "toggle_activity_log", "Events"),
@@ -69,7 +70,12 @@ class OmagentApp(App):
 
     def on_mount(self) -> None:
         self._init_loop()
-        self.query_one("#message-input", MessageInput).focus()
+        input_widget = self.query_one("#message-input", MessageInput)
+        input_widget.focus()
+        # Register skill names for autocomplete
+        if self._skill_registry:
+            invocable = self._skill_registry.get_user_invocable()
+            input_widget.set_skill_commands([s.name for s in invocable])
         self._update_sidebar()
         self._update_status_bar_meta()
         self._mount_splash()
@@ -337,6 +343,8 @@ class OmagentApp(App):
                 "  [#a8b4f0]/tools[/]          — List available tools\n"
                 "  [#a8b4f0]/session new[/]    — Start new session\n"
                 "  [#a8b4f0]/session list[/]   — List sessions\n"
+                "  [#a8b4f0]/session resume[/] — Resume a session\n"
+                "  [#a8b4f0]/stop[/]           — Stop running agent\n"
                 "  [#a8b4f0]/pack <name>[/]    — Switch domain pack\n"
                 "  [#a8b4f0]/model[/]          — Show current model\n"
                 "  [#a8b4f0]/clear[/]          — Clear chat\n"
@@ -369,16 +377,32 @@ class OmagentApp(App):
                 chat.add_system_message(f"New session: [#80cbc4]{self._agent_loop.session.id[:8]}…[/]")
                 self._update_sidebar()
                 self._update_status_bar_meta()
+            elif len(parts) > 1 and parts[1] == "resume":
+                if len(parts) < 3:
+                    chat.add_system_message("[#ef9a9a]Usage:[/] /session resume <ID>")
+                    return
+                target_id = parts[2]
+                await self._resume_session(target_id)
             elif len(parts) > 1 and parts[1] == "list":
                 if self._agent_loop.store:
                     sessions = await self._agent_loop.store.list_sessions()
                     if sessions:
                         lines = ["[bold]Recent Sessions:[/]\n"]
                         for s in sessions[:10]:
-                            lines.append(f"  [#80cbc4]{s['id'][:12]}…[/] {s['pack_name']} [dim]({s['updated_at'][:16]})[/]")
+                            title = s.get("title") or ""
+                            msgs = s.get("message_count", 0)
+                            title_str = f" [bold]{title}[/]" if title else ""
+                            lines.append(
+                                f"  [#80cbc4]{s['id'][:12]}[/]{title_str} "
+                                f"{s['pack_name']} "
+                                f"[dim]{msgs} msgs · {s['updated_at'][:16]}[/]"
+                            )
+                        lines.append("\n[dim]Resume with:[/] /session resume <ID>")
                         chat.add_system_message("\n".join(lines))
                     else:
                         chat.add_system_message("[dim]No sessions found.[/]")
+        elif cmd == "/stop":
+            self.action_stop_agent()
         elif cmd == "/pack" and len(parts) > 1:
             self.pack_name = parts[1]
             self._session_id = None
@@ -422,6 +446,109 @@ class OmagentApp(App):
                             activity.add_entry(f"Skill loaded: {skill.name}")
                     return
             chat.add_system_message(f"[#ef9a9a]Unknown command:[/] {cmd}. Type [bold]/help[/]")
+
+    async def _resume_session(self, partial_id: str) -> None:
+        """Resume a previous session by full or partial ID."""
+        chat = self.query_one("#chat-view", ChatView)
+        store = self._agent_loop.store
+        if not store:
+            chat.add_system_message("[#ef9a9a]No session store available.[/]")
+            return
+
+        # Find matching session (support partial IDs)
+        sessions = await store.list_sessions(limit=100)
+        matches = [s for s in sessions if s["id"].startswith(partial_id)]
+
+        if not matches:
+            chat.add_system_message(f"[#ef9a9a]No session found matching:[/] {partial_id}")
+            return
+        if len(matches) > 1:
+            lines = ["[#ffe082]Multiple matches:[/]\n"]
+            for s in matches[:5]:
+                lines.append(f"  [#80cbc4]{s['id'][:16]}[/] {s['pack_name']} [dim]{s['updated_at'][:16]}[/]")
+            lines.append("\n[dim]Use a longer ID prefix.[/]")
+            chat.add_system_message("\n".join(lines))
+            return
+
+        target_id = matches[0]["id"]
+
+        # Load full session from store
+        loaded = await store.load(target_id)
+        if not loaded:
+            chat.add_system_message(f"[#ef9a9a]Failed to load session:[/] {target_id[:12]}…")
+            return
+
+        # Rebuild loop with the loaded session
+        self._session_id = target_id
+        self._init_loop()
+        # Replace the fresh session with the loaded one (preserves messages + state)
+        self._agent_loop.session = loaded
+        self._turn_count = 0
+        self._tool_calls_count = 0
+
+        # Clear UI and replay messages
+        chat.clear_messages()
+        title = loaded.title or "untitled"
+        msg_count = len(loaded.messages)
+        chat.add_system_message(
+            f"[#a8b4f0]Resumed session:[/] [#80cbc4]{target_id[:12]}…[/]\n"
+            f"[dim]Title:[/] {title} · [dim]Pack:[/] {loaded.pack_name} · "
+            f"[dim]Messages:[/] {msg_count}"
+        )
+
+        # Replay conversation history into the chat view
+        for msg in loaded.messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "user":
+                if isinstance(content, str) and content:
+                    chat.add_user_message(content)
+            elif role == "assistant":
+                if isinstance(content, str) and content:
+                    chat.start_assistant_stream()
+                    chat.update_assistant_stream(content)
+                    await chat.finalize_assistant_message(content)
+                # Show tool calls if present
+                tool_calls = msg.get("tool_calls", [])
+                for tc in tool_calls:
+                    func = tc.get("function", {})
+                    name = func.get("name", "unknown")
+                    try:
+                        args = __import__("json").loads(func.get("arguments", "{}"))
+                    except Exception:
+                        args = {"raw": func.get("arguments", "")}
+                    chat.add_tool_call(name, args)
+            elif role == "tool":
+                # Tool results — update the last tool card
+                try:
+                    result = __import__("json").loads(content) if isinstance(content, str) else content
+                except Exception:
+                    result = {"output": str(content)[:200]}
+                chat.update_tool_result(None, result or {}, is_error=False)
+
+        self._update_sidebar()
+        self._update_status_bar_meta()
+
+    def action_stop_agent(self) -> None:
+        """Stop the currently running agent (Ctrl+C)."""
+        if not self._is_processing:
+            return
+        # Cancel all workers in the default group
+        self.workers.cancel_group(self, "default")
+        self._is_processing = False
+        chat = self.query_one("#chat-view", ChatView)
+        chat.hide_thinking()
+        chat.add_system_message("[#ffe082]Stopped.[/]")
+        self._update_status("ready")
+        try:
+            bar = self.query_one("#status-bar", StatusBar)
+            bar.clear_elapsed()
+        except NoMatches:
+            pass
+        activity = self._get_activity_log()
+        if activity:
+            activity.add_entry("Stopped by user (Ctrl+C)")
 
     def action_new_session(self) -> None:
         self._session_id = None

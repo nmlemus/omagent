@@ -129,11 +129,15 @@ class SplashScreen(Widget):
                     if self.recent_sessions:
                         lines = []
                         for s in self.recent_sessions[:5]:
+                            title = s.get("title") or ""
+                            msgs = s.get("message_count", 0)
+                            title_str = f" {title}" if title else ""
                             lines.append(
-                                f"[#80cbc4]{s['id'][:8]}…[/] "
+                                f"[#80cbc4]{s['id'][:8]}[/]{title_str} "
                                 f"{s['pack_name']} "
-                                f"[dim]{s.get('updated_at', '')[:16]}[/]"
+                                f"[dim]{msgs} msgs · {s.get('updated_at', '')[:16]}[/]"
                             )
+                        lines.append("\n[dim]/session resume <ID>[/]")
                         yield Static("\n".join(lines), classes="splash-info")
                     else:
                         yield Static("[dim]No recent sessions[/]", classes="splash-info")

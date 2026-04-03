@@ -145,6 +145,7 @@ class AgentLoop:
                 )
 
             _llm_start = time.monotonic()
+            _provider_error = False
             async for event in self.provider.stream(
                 messages=self.session.messages,
                 tools=self.registry.get_schemas() if self.registry.names() else None,
@@ -159,13 +160,23 @@ class AgentLoop:
                     tool_calls.append(event)
 
                 elif isinstance(event, ErrorEvent):
+                    _provider_error = True
                     await self.hooks.on_error(Exception(event.message))
+                    if self.journal:
+                        self.journal.log("llm_error", {"error": event.message})
                     yield event
 
                 elif isinstance(event, DoneEvent):
                     pass  # handled below
 
             _llm_duration_ms = int((time.monotonic() - _llm_start) * 1000)
+
+            # If the provider had an error, don't save an empty assistant message
+            if _provider_error:
+                if self.store:
+                    await self.store.save(self.session)
+                yield DoneEvent()
+                return
 
             # --- Add assistant message to session ---
             full_text = "".join(text_chunks)

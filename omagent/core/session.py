@@ -282,14 +282,28 @@ class SessionStore:
         async with aiosqlite.connect(self.db_path) as db:
             await self._ensure_schema(db)
             async with db.execute(
-                "SELECT id, pack_name, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ?",
+                """SELECT id, pack_name, created_at, updated_at, title, messages
+                   FROM sessions ORDER BY updated_at DESC LIMIT ?""",
                 (limit,),
             ) as cursor:
                 rows = await cursor.fetchall()
-                return [
-                    {"id": r[0], "pack_name": r[1], "created_at": r[2], "updated_at": r[3]}
-                    for r in rows
-                ]
+                results = []
+                for r in rows:
+                    msg_count = 0
+                    try:
+                        msgs = json.loads(r[5]) if r[5] else []
+                        msg_count = len(msgs)
+                    except Exception:
+                        pass
+                    results.append({
+                        "id": r[0],
+                        "pack_name": r[1],
+                        "created_at": r[2],
+                        "updated_at": r[3],
+                        "title": r[4],
+                        "message_count": msg_count,
+                    })
+                return results
 
     async def delete(self, session_id: str) -> bool:
         async with aiosqlite.connect(self.db_path) as db:
