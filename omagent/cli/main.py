@@ -155,7 +155,8 @@ async def _connect_mcp(loop) -> None:
 @click.group()
 def cli():
     """omagent — Oh My Agent. Generic domain-configurable agentic engine."""
-    pass
+    from omagent.core.config import setup_logging
+    setup_logging()
 
 
 @cli.command()
@@ -423,6 +424,211 @@ def workspace_open(session_id: str):
                 branch.add(f"{f.name} [dim]({size} bytes)[/]")
 
     console.print(tree)
+
+
+@workspace.command("clean")
+@click.option("--older-than", default=7, type=int, help="Remove workspaces older than N days (default: 7)")
+@click.option("--dry-run", is_flag=True, default=False, help="Show what would be deleted without deleting")
+@click.option("--force", is_flag=True, default=False, help="Skip confirmation")
+def workspace_clean(older_than: int, dry_run: bool, force: bool):
+    """Remove old workspaces to free disk space."""
+    import shutil
+    from datetime import datetime, timezone, timedelta
+    from omagent.core.workspace import get_workspaces_dir
+    from rich.console import Console
+
+    console = Console()
+    ws_dir = get_workspaces_dir()
+    if not ws_dir.exists():
+        console.print("[dim]No workspaces found.[/]")
+        return
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than)
+    to_remove = []
+    total_size = 0
+
+    for d in ws_dir.iterdir():
+        if not d.is_dir():
+            continue
+        mtime = datetime.fromtimestamp(d.stat().st_mtime, timezone.utc)
+        if mtime < cutoff:
+            size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+            to_remove.append((d, size, mtime))
+            total_size += size
+
+    if not to_remove:
+        console.print(f"[dim]No workspaces older than {older_than} days.[/]")
+        return
+
+    size_str = f"{total_size/1024:.1f}KB" if total_size < 1024*1024 else f"{total_size/1024/1024:.1f}MB"
+    console.print(f"Found [bold]{len(to_remove)}[/] workspaces older than {older_than} days ({size_str}):\n")
+    for d, size, mtime in to_remove:
+        s = f"{size/1024:.1f}KB" if size < 1024*1024 else f"{size/1024/1024:.1f}MB"
+        console.print(f"  [cyan]{d.name[:16]}…[/] [dim]{mtime.strftime('%Y-%m-%d')}[/] {s}")
+
+    if dry_run:
+        console.print(f"\n[dim]Dry run — nothing deleted. Would free {size_str}.[/]")
+        return
+
+    if not force:
+        confirm = click.confirm(f"\nDelete {len(to_remove)} workspaces?")
+        if not confirm:
+            console.print("[dim]Cancelled.[/]")
+            return
+
+    deleted = 0
+    for d, _, _ in to_remove:
+        try:
+            shutil.rmtree(d)
+            deleted += 1
+        except Exception as e:
+            console.print(f"[red]Failed to delete {d.name}: {e}[/]")
+
+    console.print(f"\n[green]Deleted {deleted} workspaces, freed {size_str}.[/]")
+
+
+@cli.group("pack")
+def pack_group():
+    """Manage domain packs."""
+    pass
+
+
+@pack_group.command("list")
+def pack_list():
+    """List available domain packs."""
+    from omagent.packs.loader import DomainPackLoader
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    loader = DomainPackLoader()
+    packs = loader.list_packs()
+
+    if not packs:
+        console.print("[dim]No packs found.[/]")
+        return
+
+    table = Table(title="Domain Packs")
+    table.add_column("Name", style="cyan")
+    table.add_column("Version")
+    table.add_column("Description")
+
+    for name in packs:
+        try:
+            p = loader.load(name)
+            table.add_row(name, p.version, p.description[:60] or "[dim]—[/]")
+        except Exception:
+            table.add_row(name, "?", "[red]failed to load[/]")
+
+    console.print(table)
+
+
+@pack_group.command("init")
+@click.argument("name")
+@click.option("--dir", "target_dir", default=None, help="Target directory (default: ~/.omagent/packs/<name>)")
+def pack_init(name: str, target_dir: str | None):
+    """Scaffold a new domain pack."""
+    from rich.console import Console
+
+    console = Console()
+    if target_dir:
+        pack_dir = Path(target_dir) / name
+    else:
+        pack_dir = Path.home() / ".omagent" / "packs" / name
+
+    if pack_dir.exists():
+        console.print(f"[red]Pack directory already exists:[/] {pack_dir}")
+        return
+
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "tools").mkdir()
+    (pack_dir / "skills").mkdir()
+    (pack_dir / "tools" / "__init__.py").write_text("")
+
+    pack_yaml = f"""name: {name}
+version: "0.1.0"
+description: "{name} domain pack"
+
+system_prompt: |
+  You are an AI assistant specialized in {name}.
+  Help the user with tasks related to {name}.
+
+tools:
+  - omagent.tools.builtin.read_file:ReadFileTool
+  - omagent.tools.builtin.write_file:WriteFileTool
+  - omagent.tools.builtin.list_dir:ListDirTool
+  - omagent.tools.builtin.bash:BashTool
+
+permissions:
+  read_file: auto
+  list_dir: auto
+  write_file: prompt
+  bash: prompt
+"""
+    (pack_dir / "pack.yaml").write_text(pack_yaml)
+
+    console.print(f"[green]Created pack:[/] [bold]{name}[/] at {pack_dir}")
+    console.print(f"\n  [dim]pack.yaml[/]     — Pack configuration")
+    console.print(f"  [dim]tools/[/]        — Custom tool modules")
+    console.print(f"  [dim]skills/[/]       — SKILL.md files")
+    console.print(f"\n  Use: [bold]omagent chat --pack {name}[/]")
+
+
+@pack_group.command("validate")
+@click.argument("name")
+def pack_validate(name: str):
+    """Validate a domain pack configuration."""
+    from omagent.packs.loader import DomainPackLoader
+    from rich.console import Console
+
+    console = Console()
+    loader = DomainPackLoader()
+    errors = []
+
+    try:
+        pack = loader.load(name)
+    except FileNotFoundError:
+        console.print(f"[red]Pack not found:[/] {name}")
+        return
+    except Exception as e:
+        console.print(f"[red]Failed to load pack:[/] {e}")
+        return
+
+    # Validate fields
+    if not pack.name:
+        errors.append("Missing 'name' field")
+    if not pack.system_prompt or pack.system_prompt == "You are a helpful AI assistant.":
+        errors.append("Using default system_prompt — consider customizing it")
+    if not pack.tools:
+        errors.append("No tools loaded — check tool paths in pack.yaml")
+
+    # Check tool names match permissions
+    tool_names = {t.name for t in pack.tools}
+    for perm_tool in pack.permissions:
+        if perm_tool not in tool_names:
+            errors.append(f"Permission for unknown tool: '{perm_tool}'")
+
+    # Check skills directory
+    if pack.pack_dir:
+        skills_dir = pack.pack_dir / "skills"
+        if skills_dir.is_dir():
+            skill_count = sum(1 for d in skills_dir.iterdir() if (d / "SKILL.md").exists())
+            console.print(f"  [dim]Skills:[/] {skill_count} found")
+        else:
+            console.print(f"  [dim]Skills:[/] no skills/ directory")
+
+    console.print(f"\n[bold]Validating pack:[/] {pack.name} v{pack.version}")
+    console.print(f"  [dim]Description:[/] {pack.description or '(none)'}")
+    console.print(f"  [dim]Tools:[/] {len(pack.tools)} ({', '.join(t.name for t in pack.tools)})")
+    console.print(f"  [dim]Permissions:[/] {len(pack.permissions)} rules")
+    console.print(f"  [dim]MCP servers:[/] {len(pack.mcp_servers)}")
+
+    if errors:
+        console.print(f"\n[yellow]Warnings ({len(errors)}):[/]")
+        for e in errors:
+            console.print(f"  [yellow]![/] {e}")
+    else:
+        console.print(f"\n[green]Pack is valid.[/]")
 
 
 @cli.command()

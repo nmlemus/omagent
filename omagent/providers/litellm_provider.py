@@ -109,11 +109,16 @@ def get_model() -> str:
     return os.getenv("OMAGENT_MODEL", DEFAULT_MODEL)
 
 
+MAX_RETRIES = 3
+RETRY_TIMEOUT = 120  # seconds per attempt
+
+
 class LiteLLMProvider:
     """Wraps litellm.acompletion with structured streaming events."""
 
-    def __init__(self, model: str | None = None):
+    def __init__(self, model: str | None = None, max_retries: int = MAX_RETRIES):
         self.model = model or get_model()
+        self.max_retries = max_retries
         self._last_usage: dict | None = None
 
     @property
@@ -160,6 +165,8 @@ class LiteLLMProvider:
                 tools=litellm_tools,
                 stream=True,
                 stream_options={"include_usage": True},
+                num_retries=self.max_retries,
+                timeout=RETRY_TIMEOUT,
                 **kwargs,
             )
 

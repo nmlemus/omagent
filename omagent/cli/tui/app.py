@@ -105,6 +105,14 @@ class OmagentApp(App):
         self._agent_loop = self.loop_factory(self.pack_name, self._session_id)
         self._session_id = self._agent_loop.session.id
         self._skill_registry = getattr(self._agent_loop, 'skill_registry', None)
+        # Wire activity log persistence
+        try:
+            activity = self.query_one("#activity-log", ActivityLog)
+            workspace = getattr(self._agent_loop, 'workspace', None)
+            if workspace:
+                activity.set_jsonl_path(workspace.logs_dir / "activity.jsonl")
+        except NoMatches:
+            pass
 
     def _update_status_bar_meta(self) -> None:
         """Set static status bar info (model, pack)."""
