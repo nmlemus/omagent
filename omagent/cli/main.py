@@ -28,6 +28,7 @@ def _build_loop(pack_name: str, session_id: str | None = None):
     mcp_servers = []
 
     # Try to load domain pack if available
+    skills_loaded = []
     try:
         from omagent.packs.loader import DomainPackLoader
         loader = DomainPackLoader()
@@ -36,6 +37,15 @@ def _build_loop(pack_name: str, session_id: str | None = None):
         registry.register_many(pack.tools)
         policy.load_pack_permissions(pack.permissions)
         mcp_servers = pack.mcp_servers
+
+        # Inject skill content into system prompt
+        for skill_path in pack.skills:
+            try:
+                skill_content = skill_path.read_text(encoding="utf-8")
+                system_prompt += f"\n\n[Skill: {skill_path.stem}]\n{skill_content}"
+                skills_loaded.append(skill_path.stem)
+            except Exception:
+                pass
     except Exception:
         system_prompt = f"You are a helpful AI assistant. Pack: {pack_name}."
 
@@ -57,6 +67,15 @@ def _build_loop(pack_name: str, session_id: str | None = None):
     plan_store = PlanStore()
 
     session.workspace_path = str(workspace.root)
+
+    # Log pack loading to journal
+    journal.log("pack_loaded", {
+        "pack_name": pack_name,
+        "tools": registry.names(),
+        "skills": skills_loaded,
+        "workspace": str(workspace.root),
+    })
+    journal.log_session_start(pack_name, LiteLLMProvider().model)
 
     # Register cross-cutting tools (transversal — available in ALL packs)
     remember_tool = RememberTool(memory_store=memory_store, session_id=sid)

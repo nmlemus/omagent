@@ -204,13 +204,15 @@ class AgentLoop:
                 except Exception as e:
                     logger.warning("tracker.log_llm_call failed: %s", e)
 
-            # --- If no tool calls, try to parse a plan from the text response ---
-            if not tool_calls:
-                if self.plan_store and full_text:
-                    try:
-                        from omagent.core.planner import AgentPlan
+            # --- Try to parse a plan from EARLY rounds (when tools follow) ---
+            if tool_calls and self.plan_store and full_text and iteration <= 1:
+                # Only parse plan from early rounds — agent outlines steps then executes
+                try:
+                    from omagent.core.planner import AgentPlan
+                    existing = await self.plan_store.load(self.session.id)
+                    if not existing:  # Don't overwrite an existing plan
                         plan = AgentPlan.parse_from_text(full_text)
-                        if plan and len(plan.steps) >= 2:
+                        if plan and len(plan.steps) >= 3:
                             await self.plan_store.save(self.session.id, plan)
                             if self.journal:
                                 self.journal.log("plan_created", {
@@ -218,8 +220,11 @@ class AgentLoop:
                                     "total_steps": len(plan.steps),
                                     "steps": [s.description for s in plan.steps],
                                 })
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
+
+            # --- If no tool calls, we're done ---
+            if not tool_calls:
                 if self.journal:
                     self.journal.log_session_end(
                         turns=iteration + 1,
