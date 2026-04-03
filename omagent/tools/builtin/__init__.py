@@ -5,5 +5,6 @@ from omagent.tools.builtin.bash import BashTool
 from omagent.tools.builtin.delegate import DelegateTool
 from omagent.tools.builtin.summarize import SummarizeTool
 from omagent.tools.builtin.remember import RememberTool
+from omagent.tools.builtin.skill_tool import SkillTool
 
-__all__ = ["ReadFileTool", "WriteFileTool", "ListDirTool", "BashTool", "DelegateTool", "SummarizeTool", "RememberTool"]
+__all__ = ["ReadFileTool", "WriteFileTool", "ListDirTool", "BashTool", "DelegateTool", "SummarizeTool", "RememberTool", "SkillTool"]

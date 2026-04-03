@@ -396,19 +396,28 @@ class OmagentApp(App):
             chat.clear_messages()
         elif cmd == "/quit":
             self.exit()
+        elif cmd == "/skills":
+            if self._skill_registry:
+                skills = self._skill_registry.list_all()
+                if skills:
+                    lines = ["[bold]Available Skills:[/]\n"]
+                    for s in skills:
+                        lines.append(f"  [#a8b4f0]/{s['name']}[/] — {s['description'][:50]} [dim]({s['source']})[/]")
+                    chat.add_system_message("\n".join(lines))
+                else:
+                    chat.add_system_message("[dim]No skills found.[/]")
+            return
         else:
             # Check if it's a skill command
             activity = self._get_activity_log()
             if hasattr(self, '_skill_registry') and self._skill_registry:
                 skill = self._skill_registry.get_by_name(cmd.lstrip("/"))
-                if skill and skill.user_invocable:
-                    instructions = self._skill_registry.load_full(skill.name)
-                    if instructions:
+                if skill:
+                    content = self._skill_registry.get_full_content(skill.name)
+                    if content:
                         chat.add_system_message(f"[#a8b4f0]Loaded skill:[/] `{skill.name}` — {skill.description[:60]}")
                         # Inject into the loop's system prompt
-                        if skill.name not in self._agent_loop._injected_skills:
-                            self._agent_loop._injected_skills.add(skill.name)
-                            self._agent_loop.system_prompt += f"\n\n[Skill: {skill.name}]\n{instructions}"
+                        self._agent_loop.system_prompt += f"\n\n[Skill: {skill.name}]\n{content}"
                         if activity:
                             activity.add_entry(f"Skill loaded: {skill.name}")
                     return

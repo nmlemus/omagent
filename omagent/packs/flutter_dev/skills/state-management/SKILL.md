@@ -1,19 +1,19 @@
 ---
 name: state-management
 description: State management patterns for Flutter — Riverpod, Bloc, and Provider with best practices
-triggers:
-  - state management
-  - riverpod
-  - bloc
-  - provider
-  - state
-  - notifier
 allowed-tools: flutter_cli read_file write_file pubspec_manager dart_analyze
-user-invocable: true
-level: 2
 metadata:
   pack: flutter_dev
   version: "1.0"
+  level: 2
+  user-invocable: true
+  triggers:
+    - state management
+    - riverpod
+    - bloc
+    - provider
+    - state
+    - notifier
 ---
 
 ## State Management in Flutter

@@ -1,21 +1,21 @@
 ---
 name: modeling
 description: Machine learning model training — feature engineering, model selection, cross-validation, and evaluation
-triggers:
-  - model
-  - train a model
-  - predict
-  - classification
-  - regression
-  - machine learning
-  - ml pipeline
-  - feature engineering
 allowed-tools: jupyter_execute model_train dataset_profile read_file write_file
-user-invocable: true
-level: 2
 metadata:
   pack: data_science
   version: "1.0"
+  level: 2
+  user-invocable: true
+  triggers:
+    - model
+    - train a model
+    - predict
+    - classification
+    - regression
+    - machine learning
+    - ml pipeline
+    - feature engineering
 ---
 
 ## ML Modeling Workflow

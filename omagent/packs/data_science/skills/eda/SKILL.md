@@ -1,21 +1,21 @@
 ---
 name: eda
 description: Exploratory data analysis — profiling datasets, checking distributions, finding correlations, and identifying outliers
-triggers:
-  - eda
-  - exploratory
-  - explore the data
-  - profile the data
-  - distributions
-  - correlations
-  - outliers
-  - data overview
 allowed-tools: jupyter_execute dataset_profile read_file list_dir
-user-invocable: true
-level: 1
 metadata:
   pack: data_science
   version: "1.0"
+  level: 1
+  user-invocable: true
+  triggers:
+    - eda
+    - exploratory
+    - explore the data
+    - profile the data
+    - distributions
+    - correlations
+    - outliers
+    - data overview
 ---
 
 ## Exploratory Data Analysis Workflow

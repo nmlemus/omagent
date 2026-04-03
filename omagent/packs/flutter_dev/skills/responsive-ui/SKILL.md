@@ -1,20 +1,20 @@
 ---
 name: responsive-ui
 description: Responsive UI design for Flutter — adaptive layouts for phones, tablets, Android, and iOS
-triggers:
-  - responsive
-  - layout
-  - screen size
-  - tablet
-  - adaptive
-  - material design
-  - cupertino
 allowed-tools: flutter_cli read_file write_file dart_analyze
-user-invocable: true
-level: 1
 metadata:
   pack: flutter_dev
   version: "1.0"
+  level: 1
+  user-invocable: true
+  triggers:
+    - responsive
+    - layout
+    - screen size
+    - tablet
+    - adaptive
+    - material design
+    - cupertino
 ---
 
 ## Responsive UI for Flutter

@@ -1,123 +1,136 @@
 import pytest
 from pathlib import Path
-from omagent.core.skill_loader import Skill, SkillRegistry, parse_skill_md
+from omagent.core.skill_loader import Skill, SkillRegistry
 
 
 @pytest.fixture
 def skill_dir(tmp_path):
-    """Create a test skill directory."""
+    """Create valid SKILL.md files."""
     eda_dir = tmp_path / "eda"
     eda_dir.mkdir()
     (eda_dir / "SKILL.md").write_text("""---
 name: eda
-description: Exploratory data analysis
-triggers:
-  - eda
-  - explore the data
-  - profile
+description: Exploratory data analysis workflow
 allowed-tools: jupyter_execute dataset_profile
-user-invocable: true
-level: 1
 metadata:
   pack: data_science
+  user-invocable: "true"
 ---
 
 ## EDA Workflow
-
 1. Profile the dataset
 2. Check distributions
-3. Find correlations
 """)
-    scripts_dir = eda_dir / "scripts"
-    scripts_dir.mkdir()
-    (scripts_dir / "quick_check.py").write_text('print("hello from script")')
 
     modeling_dir = tmp_path / "modeling"
     modeling_dir.mkdir()
     (modeling_dir / "SKILL.md").write_text("""---
 name: modeling
 description: ML model training workflow
-triggers:
-  - model
-  - train
-  - predict
-user-invocable: true
-level: 2
+metadata:
+  pack: data_science
 ---
 
-## Modeling Workflow
+## Modeling
 1. Prepare features
 2. Train model
 """)
     return tmp_path
 
 
-def test_parse_skill_md(skill_dir):
-    skill = parse_skill_md(skill_dir / "eda" / "SKILL.md")
+def test_discover(skill_dir):
+    reg = SkillRegistry()
+    count = reg.discover([skill_dir])
+    assert count == 2
+    assert "eda" in reg.names()
+    assert "modeling" in reg.names()
+
+
+def test_get_by_name(skill_dir):
+    reg = SkillRegistry()
+    reg.discover([skill_dir])
+    skill = reg.get_by_name("eda")
     assert skill is not None
     assert skill.name == "eda"
-    assert skill.description == "Exploratory data analysis"
-    assert "eda" in skill.triggers
-    assert "explore the data" in skill.triggers
-    assert skill.user_invocable is True
-    assert skill.scripts_dir is not None
+    assert skill.description == "Exploratory data analysis workflow"
 
 
-def test_discover(skill_dir):
-    registry = SkillRegistry()
-    count = registry.discover([skill_dir])
-    assert count == 2
-    assert "eda" in registry.names()
-    assert "modeling" in registry.names()
+def test_case_insensitive(skill_dir):
+    reg = SkillRegistry()
+    reg.discover([skill_dir])
+    assert reg.get_by_name("EDA") is not None
 
 
-def test_metadata_prompt(skill_dir):
-    registry = SkillRegistry()
-    registry.discover([skill_dir])
-    prompt = registry.get_metadata_prompt()
-    assert "[Available Skills]" in prompt
-    assert "eda" in prompt
-    assert "modeling" in prompt
+def test_get_full_content(skill_dir):
+    reg = SkillRegistry()
+    reg.discover([skill_dir])
+    content = reg.get_full_content("eda")
+    assert content is not None
+    assert "EDA Workflow" in content
 
 
-def test_match_triggers(skill_dir):
-    registry = SkillRegistry()
-    registry.discover([skill_dir])
-
-    matches = registry.match_triggers("can you explore the data please")
-    assert len(matches) >= 1
-    assert matches[0].name == "eda"
-
-
-def test_match_triggers_no_match(skill_dir):
-    registry = SkillRegistry()
-    registry.discover([skill_dir])
-
-    matches = registry.match_triggers("hello world")
-    assert len(matches) == 0
+def test_prompt_xml(skill_dir):
+    reg = SkillRegistry()
+    reg.discover([skill_dir])
+    xml = reg.get_prompt_xml()
+    assert "<available_skills>" in xml
+    assert "<name>" in xml
+    assert "eda" in xml
 
 
-def test_load_full(skill_dir):
-    registry = SkillRegistry()
-    registry.discover([skill_dir])
+def test_list_all(skill_dir):
+    reg = SkillRegistry()
+    reg.discover([skill_dir])
+    all_skills = reg.list_all()
+    assert len(all_skills) == 2
+    assert all_skills[0]["name"] in ("eda", "modeling")
 
-    instructions = registry.load_full("eda")
-    assert instructions is not None
-    assert "Profile the dataset" in instructions
+
+def test_invalid_skill_rejected(tmp_path):
+    bad_dir = tmp_path / "bad-skill"
+    bad_dir.mkdir()
+    (bad_dir / "SKILL.md").write_text("no frontmatter here")
+
+    reg = SkillRegistry()
+    count = reg.discover([tmp_path])
+    assert count == 0
 
 
 def test_user_invocable(skill_dir):
-    registry = SkillRegistry()
-    registry.discover([skill_dir])
+    reg = SkillRegistry()
+    reg.discover([skill_dir])
+    invocable = reg.get_user_invocable()
+    assert len(invocable) >= 1
 
-    invocable = registry.get_user_invocable()
-    assert len(invocable) == 2
+
+def test_skill_tool():
+    from omagent.tools.builtin.skill_tool import SkillTool
+    reg = SkillRegistry()
+    tool = SkillTool(skill_registry=reg)
+    assert tool.name == "Skill"
+    schema = tool.to_schema()
+    assert "skill" in schema["input_schema"]["properties"]
 
 
 @pytest.mark.asyncio
-async def test_run_script(skill_dir):
-    registry = SkillRegistry()
-    registry.discover([skill_dir])
+async def test_skill_tool_execute(skill_dir):
+    from omagent.tools.builtin.skill_tool import SkillTool
+    reg = SkillRegistry()
+    reg.discover([skill_dir])
+    tool = SkillTool(skill_registry=reg)
 
-    output = await registry.run_script("eda", "quick_check.py")
-    assert "hello from script" in output
+    result = await tool.execute({"skill": "eda"})
+    assert result["skill"] == "eda"
+    assert "EDA Workflow" in result["prompt"]
+    assert result["description"] == "Exploratory data analysis workflow"
+
+
+@pytest.mark.asyncio
+async def test_skill_tool_unknown(skill_dir):
+    from omagent.tools.builtin.skill_tool import SkillTool
+    reg = SkillRegistry()
+    reg.discover([skill_dir])
+    tool = SkillTool(skill_registry=reg)
+
+    result = await tool.execute({"skill": "nonexistent"})
+    assert "error" in result

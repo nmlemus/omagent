@@ -28,8 +28,9 @@ def _build_loop(pack_name: str, session_id: str | None = None):
     mcp_servers = []
 
     # Try to load domain pack if available
-    from omagent.core.skill_loader import SkillRegistry, parse_skill_md
+    from omagent.core.skill_loader import SkillRegistry
     skill_registry = SkillRegistry()
+
     try:
         from omagent.packs.loader import DomainPackLoader
         loader = DomainPackLoader()
@@ -39,31 +40,31 @@ def _build_loop(pack_name: str, session_id: str | None = None):
         policy.load_pack_permissions(pack.permissions)
         mcp_servers = pack.mcp_servers
 
-        # Register pack skills with the skill registry
-        if hasattr(pack, 'skills') and pack.skills:
-            for skill_path in pack.skills:
-                if skill_path.is_dir():
-                    skill_registry.discover([skill_path])
-                elif skill_path.is_file():
-                    # Backward compat: plain .md file
-                    skill = parse_skill_md(skill_path)
-                    if skill:
-                        skill_registry.register(skill)
+        # Discover skills from pack directory
+        if pack.pack_dir:
+            pack_skills_dir = pack.pack_dir / "skills"
+            if pack_skills_dir.is_dir():
+                skill_registry.discover([pack_skills_dir], source="pack")
     except Exception:
         system_prompt = f"You are a helpful AI assistant. Pack: {pack_name}."
 
-    # Also discover from standard user paths
+    # Discover from standard paths + walk-up
     skill_registry.discover([
         Path.cwd() / ".omagent" / "skills",
         Path.home() / ".omagent" / "skills",
-    ])
+        Path.home() / ".claude" / "skills",
+    ], source="user")
+    skill_registry.discover_walk_up()
 
-    # Add Level 1 metadata to system prompt
-    metadata_prompt = skill_registry.get_metadata_prompt()
-    if metadata_prompt:
-        system_prompt += f"\n\n{metadata_prompt}"
+    # Add <available_skills> XML to system prompt
+    xml_prompt = skill_registry.get_prompt_xml()
+    if xml_prompt:
+        system_prompt += f"\n\n{xml_prompt}"
 
     skills_loaded = skill_registry.names()
+
+    from omagent.tools.builtin.skill_tool import SkillTool
+    registry.register(SkillTool(skill_registry))
 
     from omagent.core.tracker import ActivityTracker
     from omagent.core.workspace import Workspace

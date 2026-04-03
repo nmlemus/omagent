@@ -1,266 +1,179 @@
 # omagent/core/skill_loader.py
-"""Skill system — SKILL.md parser, discovery, trigger matching, progressive loading."""
-import asyncio
+"""Skill system — uses skills-ref library for Agent Skills spec compliance."""
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
+from skills_ref import read_properties, validate, to_prompt, find_skill_md, SkillProperties
 
 logger = logging.getLogger(__name__)
-
-MAX_SKILLS_PER_PROMPT = 5
 
 
 @dataclass
 class Skill:
-    """A loaded skill from SKILL.md."""
+    """A discovered skill with its properties and location."""
     name: str
     description: str = ""
-    triggers: list[str] = field(default_factory=list)
-    instructions: str = ""
-    allowed_tools: list[str] = field(default_factory=list)
-    user_invocable: bool = True
-    model_invocable: bool = True
-    model: str | None = None
-    level: int = 1
-    scripts_dir: Path | None = None
-    references_dir: Path | None = None
-    pack: str | None = None
-    path: Path | None = None
+    allowed_tools: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
+    path: Path | None = None  # Path to SKILL.md
+    skill_dir: Path | None = None  # Parent directory
+    source: str = "unknown"  # "project", "pack", "user"
+    full_content: str | None = None  # Cached full SKILL.md content
 
-
-def parse_skill_md(skill_md_path: Path) -> Skill | None:
-    """Parse a SKILL.md file into a Skill object.
-
-    Format:
-    ---
-    name: skill-name
-    description: what it does
-    triggers:
-      - keyword1
-      - keyword2
-    allowed-tools: tool1 tool2
-    user-invocable: true
-    level: 1
-    metadata:
-      pack: data_science
-    ---
-
-    Markdown instructions...
-    """
-    try:
-        content = skill_md_path.read_text(encoding="utf-8")
-    except Exception as e:
-        logger.warning("Failed to read skill: %s: %s", skill_md_path, e)
-        return None
-
-    # Parse YAML frontmatter
-    match = re.match(r'^---\s*\n(.*?)\n---\s*\n(.*)', content, re.DOTALL)
-    if not match:
-        # No frontmatter — treat entire file as instructions with directory name as skill name
-        return Skill(
-            name=skill_md_path.parent.name,
-            instructions=content,
-            path=skill_md_path,
+    @classmethod
+    def from_properties(cls, props: SkillProperties, skill_dir: Path, source: str = "unknown") -> "Skill":
+        skill_md = find_skill_md(skill_dir)
+        content = skill_md.read_text(encoding="utf-8") if skill_md else None
+        return cls(
+            name=props.name,
+            description=props.description,
+            allowed_tools=props.allowed_tools,
+            metadata=props.metadata or {},
+            path=skill_md,
+            skill_dir=skill_dir,
+            source=source,
+            full_content=content,
         )
-
-    try:
-        frontmatter = yaml.safe_load(match.group(1)) or {}
-    except yaml.YAMLError as e:
-        logger.warning("Invalid YAML in skill %s: %s", skill_md_path, e)
-        return None
-
-    body = match.group(2).strip()
-    skill_dir = skill_md_path.parent
-
-    # Parse allowed-tools (can be string or list)
-    allowed_tools_raw = frontmatter.get("allowed-tools", "")
-    if isinstance(allowed_tools_raw, str):
-        allowed_tools = allowed_tools_raw.split() if allowed_tools_raw else []
-    elif isinstance(allowed_tools_raw, list):
-        allowed_tools = allowed_tools_raw
-    else:
-        allowed_tools = []
-
-    # Parse triggers
-    triggers = frontmatter.get("triggers", [])
-    if isinstance(triggers, str):
-        triggers = [triggers]
-
-    metadata = frontmatter.get("metadata", {}) or {}
-
-    scripts_dir = skill_dir / "scripts"
-    references_dir = skill_dir / "references"
-
-    return Skill(
-        name=frontmatter.get("name", skill_dir.name),
-        description=frontmatter.get("description", ""),
-        triggers=[t.lower() for t in triggers],
-        instructions=body,
-        allowed_tools=allowed_tools,
-        user_invocable=not frontmatter.get("disable-user-invocation", False),
-        model_invocable=not frontmatter.get("disable-model-invocation", False),
-        model=frontmatter.get("model"),
-        level=frontmatter.get("level", 1),
-        scripts_dir=scripts_dir if scripts_dir.is_dir() else None,
-        references_dir=references_dir if references_dir.is_dir() else None,
-        pack=metadata.get("pack"),
-        path=skill_md_path,
-    )
-
-
-def _sanitize_input(text: str) -> str:
-    """Sanitize user input for trigger matching.
-
-    Remove code blocks, URLs, file paths to prevent false positives.
-    Pattern verified from keyword-detector.mjs.
-    """
-    text = re.sub(r'```[\s\S]*?```', '', text)           # Code blocks
-    text = re.sub(r'`[^`]+`', '', text)                   # Inline code
-    text = re.sub(r'https?://[^\s)>\]]+', '', text)       # URLs
-    return text.lower()
 
 
 class SkillRegistry:
-    """Discovers, loads, and manages skills with trigger-based matching."""
+    """Discovers and manages skills using the skills-ref library."""
 
     def __init__(self):
         self._skills: dict[str, Skill] = {}
+        self._skill_dirs: list[Path] = []
 
-    def discover(self, search_paths: list[Path]) -> int:
-        """Scan directories for SKILL.md files. Returns count of skills found."""
+    def discover(self, search_paths: list[Path], source: str = "unknown") -> int:
+        """Scan directories for SKILL.md files using skills-ref."""
         count = 0
-        seen_paths: set[str] = set()
+        seen: set[str] = set()
 
         for base_path in search_paths:
-            if not base_path.exists():
+            if not base_path.exists() or not base_path.is_dir():
                 continue
-            # Check if base_path itself contains SKILL.md
-            skill_md = base_path / "SKILL.md"
-            if skill_md.exists():
-                real = str(skill_md.resolve())
-                if real not in seen_paths:
-                    seen_paths.add(real)
-                    skill = parse_skill_md(skill_md)
+
+            # Check if base_path itself is a skill directory
+            if find_skill_md(base_path):
+                real = str(base_path.resolve())
+                if real not in seen:
+                    seen.add(real)
+                    skill = self._load_skill(base_path, source)
                     if skill:
-                        self._skills[skill.name] = skill
                         count += 1
 
-            # Scan subdirectories for SKILL.md
-            if base_path.is_dir():
-                for child in sorted(base_path.iterdir()):
-                    if child.is_dir():
-                        skill_md = child / "SKILL.md"
-                        if skill_md.exists():
-                            real = str(skill_md.resolve())
-                            if real not in seen_paths:
-                                seen_paths.add(real)
-                                skill = parse_skill_md(skill_md)
-                                if skill:
-                                    self._skills[skill.name] = skill
-                                    count += 1
-                        # Also check for plain .md files (backward compat)
-                        for md_file in sorted(child.glob("*.md")):
-                            if md_file.name != "SKILL.md":
-                                real = str(md_file.resolve())
-                                if real not in seen_paths:
-                                    seen_paths.add(real)
-                                    skill = parse_skill_md(md_file)
-                                    if skill:
-                                        self._skills[skill.name] = skill
-                                        count += 1
+            # Check subdirectories
+            for child in sorted(base_path.iterdir()):
+                if child.is_dir() and find_skill_md(child):
+                    real = str(child.resolve())
+                    if real not in seen:
+                        seen.add(real)
+                        skill = self._load_skill(child, source)
+                        if skill:
+                            count += 1
 
-        logger.info("Discovered %d skills from %d paths", count, len(search_paths))
+        logger.info("Discovered %d skills from %d paths (source: %s)", count, len(search_paths), source)
         return count
+
+    def discover_walk_up(self, cwd: Path | None = None) -> int:
+        """Walk up from cwd ancestors checking for skills directories.
+
+        Pattern from claw-code-parity discover_skill_roots().
+        Checks .omagent/skills/ and .claude/skills/ at each ancestor.
+        """
+        cwd = cwd or Path.cwd()
+        count = 0
+        for ancestor in cwd.parents:
+            for leaf in (".omagent/skills", ".claude/skills"):
+                skills_dir = ancestor / leaf
+                if skills_dir.is_dir():
+                    count += self.discover([skills_dir], source="project")
+            # Stop at filesystem root
+            if ancestor == ancestor.parent:
+                break
+        return count
+
+    def _load_skill(self, skill_dir: Path, source: str) -> Skill | None:
+        """Load and validate a single skill directory."""
+        # Validate first
+        errors = validate(skill_dir)
+        if errors:
+            logger.warning("Skill validation errors in %s: %s", skill_dir, errors)
+            return None
+
+        try:
+            props = read_properties(skill_dir)
+        except Exception as e:
+            logger.warning("Failed to read skill %s: %s", skill_dir, e)
+            return None
+
+        skill = Skill.from_properties(props, skill_dir, source)
+
+        # Don't overwrite existing (first found wins — higher priority)
+        if skill.name not in self._skills:
+            self._skills[skill.name] = skill
+            self._skill_dirs.append(skill_dir)
+            return skill
+        return None
 
     def register(self, skill: Skill) -> None:
         """Register a skill directly."""
         self._skills[skill.name] = skill
+        if skill.skill_dir and skill.skill_dir not in self._skill_dirs:
+            self._skill_dirs.append(skill.skill_dir)
 
     def get_by_name(self, name: str) -> Skill | None:
-        """Get a skill by name."""
-        return self._skills.get(name)
-
-    def names(self) -> list[str]:
-        """List all skill names."""
-        return list(self._skills.keys())
-
-    def get_metadata_prompt(self) -> str:
-        """Level 1: Generate skill names + descriptions for system prompt.
-
-        Lightweight — all skills fit in context as metadata.
-        """
-        if not self._skills:
-            return ""
-
-        lines = ["[Available Skills]"]
-        for skill in self._skills.values():
-            invocable = " (invoke with /{})".format(skill.name) if skill.user_invocable else ""
-            lines.append(f"- {skill.name}: {skill.description}{invocable}")
-        return "\n".join(lines)
-
-    def match_triggers(self, user_input: str) -> list[Skill]:
-        """Match user input against skill triggers.
-
-        Scoring: +10 per trigger match, sorted descending, capped at MAX_SKILLS_PER_PROMPT.
-        Pattern verified from skill-injector.mjs:128-182.
-        """
-        sanitized = _sanitize_input(user_input)
-        scored: list[tuple[int, Skill]] = []
-
-        for skill in self._skills.values():
-            if not skill.model_invocable:
-                continue
-            score = 0
-            for trigger in skill.triggers:
-                if trigger in sanitized:
-                    score += 10
-            if score > 0:
-                scored.append((score, skill))
-
-        # Sort by score descending, cap at MAX
-        scored.sort(key=lambda x: -x[0])
-        return [skill for _, skill in scored[:MAX_SKILLS_PER_PROMPT]]
-
-    def load_full(self, skill_name: str) -> str | None:
-        """Level 2: Load full instructions for a skill."""
-        skill = self._skills.get(skill_name)
-        if skill:
-            return skill.instructions
+        """Get skill by name (case-insensitive like claw-code)."""
+        # Exact match first
+        if name in self._skills:
+            return self._skills[name]
+        # Case-insensitive fallback
+        name_lower = name.lower()
+        for skill_name, skill in self._skills.items():
+            if skill_name.lower() == name_lower:
+                return skill
         return None
 
-    async def run_script(self, skill_name: str, script_name: str) -> str:
-        """Level 3: Execute a script from a skill's scripts/ directory.
+    def get_full_content(self, name: str) -> str | None:
+        """Get the full SKILL.md content for a skill (for the Skill tool)."""
+        skill = self.get_by_name(name)
+        if skill and skill.full_content:
+            return skill.full_content
+        if skill and skill.path and skill.path.exists():
+            return skill.path.read_text(encoding="utf-8")
+        return None
 
-        Code never enters context — only stdout is returned.
-        """
-        skill = self._skills.get(skill_name)
-        if not skill or not skill.scripts_dir:
-            return f"Skill '{skill_name}' has no scripts directory"
-
-        script_path = skill.scripts_dir / script_name
-        if not script_path.exists():
-            return f"Script not found: {script_name}"
-
+    def get_prompt_xml(self) -> str:
+        """Generate <available_skills> XML using skills-ref to_prompt()."""
+        if not self._skill_dirs:
+            return ""
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "python3", str(script_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-            output = stdout.decode("utf-8", errors="replace")
-            if stderr:
-                output += "\n" + stderr.decode("utf-8", errors="replace")
-            return output
-        except asyncio.TimeoutError:
-            return f"Script timed out: {script_name}"
+            return to_prompt(self._skill_dirs)
         except Exception as e:
-            return f"Script error: {e}"
+            logger.warning("Failed to generate skills prompt: %s", e)
+            return ""
+
+    def names(self) -> list[str]:
+        return list(self._skills.keys())
+
+    def list_all(self) -> list[dict]:
+        """List all skills with metadata for /skills list command."""
+        return [
+            {
+                "name": s.name,
+                "description": s.description,
+                "source": s.source,
+                "path": str(s.skill_dir) if s.skill_dir else None,
+                "allowed_tools": s.allowed_tools,
+            }
+            for s in self._skills.values()
+        ]
 
     def get_user_invocable(self) -> list[Skill]:
-        """Get all skills that can be invoked by the user as slash commands."""
-        return [s for s in self._skills.values() if s.user_invocable]
+        """Get skills that can be invoked as slash commands."""
+        # All skills are user-invocable unless metadata says otherwise
+        return [
+            s for s in self._skills.values()
+            if s.metadata.get("user-invocable", "true").lower() != "false"
+        ]

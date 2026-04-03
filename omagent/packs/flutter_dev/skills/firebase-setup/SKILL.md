@@ -1,20 +1,20 @@
 ---
 name: firebase-setup
 description: Firebase project setup for Flutter — authentication, Firestore, storage, and messaging configuration
-triggers:
-  - firebase
-  - firebase setup
-  - firebase config
-  - flutterfire
-  - authentication
-  - firestore
-  - firebase auth
 allowed-tools: flutter_cli bash read_file write_file pubspec_manager
-user-invocable: true
-level: 2
 metadata:
   pack: flutter_dev
   version: "1.0"
+  level: 2
+  user-invocable: true
+  triggers:
+    - firebase
+    - firebase setup
+    - firebase config
+    - flutterfire
+    - authentication
+    - firestore
+    - firebase auth
 ---
 
 ## Firebase Setup for Flutter

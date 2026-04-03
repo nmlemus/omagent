@@ -1,21 +1,21 @@
 ---
 name: cleaning
 description: Data cleaning — handling missing values, outliers, duplicates, type corrections, and validation
-triggers:
-  - clean
-  - cleaning
-  - missing values
-  - null values
-  - duplicates
-  - data quality
-  - fix the data
-  - preprocess
 allowed-tools: jupyter_execute dataset_profile read_file write_file
-user-invocable: true
-level: 1
 metadata:
   pack: data_science
   version: "1.0"
+  level: 1
+  user-invocable: true
+  triggers:
+    - clean
+    - cleaning
+    - missing values
+    - null values
+    - duplicates
+    - data quality
+    - fix the data
+    - preprocess
 ---
 
 ## Data Cleaning Workflow
