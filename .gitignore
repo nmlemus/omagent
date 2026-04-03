@@ -14,6 +14,10 @@ venv/
 *.so
 .DS_Store
 *.png
-.omc/state/
+.omc/
+.agents/
+.claude/
+.planning/
+skills-lock.json
 *.csv
 uv.lock
