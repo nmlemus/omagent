@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 from omagent.tools.base import Tool
+from omagent.tools.builtin._path_guard import check_path
 
 
 class ListDirTool(Tool):
@@ -26,7 +27,10 @@ class ListDirTool(Tool):
         }
 
     async def execute(self, input: dict[str, Any]) -> dict[str, Any]:
-        path = Path(input.get("path", ".")).expanduser()
+        path = Path(input.get("path", ".")).expanduser().resolve()
+        error = check_path(path)
+        if error:
+            return {"error": error}
         try:
             entries = []
             for entry in sorted(path.iterdir()):

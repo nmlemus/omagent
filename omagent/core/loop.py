@@ -17,6 +17,7 @@ from omagent.core.permissions import Permission, PermissionPolicy
 from omagent.core.registry import ToolRegistry
 from omagent.core.session import Session, SessionStore
 from omagent.core.tracker import ActivityTracker
+from omagent.core.config import get_config
 from omagent.providers.litellm_provider import LiteLLMProvider
 
 if TYPE_CHECKING:
@@ -27,8 +28,6 @@ if TYPE_CHECKING:
     from omagent.core.skill_loader import SkillRegistry
 
 logger = logging.getLogger(__name__)
-
-MAX_ITERATIONS = 20  # guard against infinite tool loops
 
 
 class AgentLoop:
@@ -65,6 +64,7 @@ class AgentLoop:
         memory_store: "MemoryStore | None" = None,
         plan_store: "PlanStore | None" = None,
         skill_registry: "SkillRegistry | None" = None,
+        max_iterations: int | None = None,
     ):
         self.session = session
         self.registry = registry
@@ -80,7 +80,44 @@ class AgentLoop:
         self.memory_store = memory_store
         self.plan_store = plan_store
         self.skill_registry = skill_registry
+        self.max_iterations = max_iterations or get_config().max_iterations
         self.mcp_manager = None  # set after async MCP connection
+
+    async def _execute_tool(self, tc: ToolCallEvent) -> ToolResultEvent:
+        """Execute a tool call with hooks, timing, journaling, tracking, and plan updates."""
+        if self.journal:
+            self.journal.log_tool_call(tc.name, tc.input)
+        await self.hooks.pre_tool(tc.name, tc.input)
+        _tool_start = time.monotonic()
+        result = await self.registry.execute(tc.name, tc.input)
+        _tool_duration_ms = int((time.monotonic() - _tool_start) * 1000)
+        await self.hooks.post_tool(tc.name, result)
+        is_error = "error" in result
+        self.session.add_tool_result(tc.id, result, is_error=is_error)
+        if self.journal:
+            self.journal.log_tool_result(tc.name, is_error=is_error, duration_ms=_tool_duration_ms)
+        if self.tracker:
+            try:
+                await self.tracker.log_tool_call(
+                    self.session.id, tc.name, tc.input, result, _tool_duration_ms
+                )
+            except Exception as e:
+                logger.warning("tracker.log_tool_call failed: %s", e)
+        if self.plan_store:
+            try:
+                plan = await self.plan_store.load(self.session.id)
+                if plan and plan.current_step:
+                    plan.start_step(plan.current_step, tool_name=tc.name)
+                    plan.complete_step(plan.current_step, result_summary=str(result.get("output", ""))[:100])
+                    await self.plan_store.save(self.session.id, plan)
+            except Exception:
+                pass
+        return ToolResultEvent(
+            tool_use_id=tc.id,
+            tool_name=tc.name,
+            result=result,
+            is_error=is_error,
+        )
 
     async def run(
         self, user_message: str
@@ -94,18 +131,19 @@ class AgentLoop:
         if self.journal:
             self.journal.log_user_message(user_message)
 
-        # Inject existing memories into system prompt for session resume
+        # Compute effective system prompt (don't mutate self.system_prompt)
+        effective_prompt = self.system_prompt
         if self.memory_store:
             try:
                 ctx = await self.memory_store.get_context_injection(self.session.id)
                 if ctx:
-                    self.system_prompt = self.system_prompt + "\n\n" + ctx
+                    effective_prompt = self.system_prompt + "\n\n" + ctx
             except Exception:
                 pass
 
         _first_iteration = True
 
-        for iteration in range(MAX_ITERATIONS):
+        for iteration in range(self.max_iterations):
             text_chunks: list[str] = []
             tool_calls: list[ToolCallEvent] = []
 
@@ -149,7 +187,7 @@ class AgentLoop:
             async for event in self.provider.stream(
                 messages=self.session.messages,
                 tools=self.registry.get_schemas() if self.registry.names() else None,
-                system=self.system_prompt,
+                system=effective_prompt,
             ):
                 if isinstance(event, TextDeltaEvent):
                     text_chunks.append(event.content)
@@ -268,79 +306,16 @@ class AgentLoop:
                         self.journal.log_tool_result(tc.name, is_error=True, duration_ms=None)
 
                 elif permission == Permission.PROMPT:
-                    # Yield the prompt event — the caller (CLI/server) will handle it
-                    # For now we auto-execute (caller can override by subclassing)
+                    # TODO: Currently executes immediately after yielding the prompt event.
+                    # A full fix requires an async callback so the caller (TUI/server)
+                    # can approve/deny before execution proceeds.
                     yield PermissionPromptEvent(tool_name=tc.name, input=tc.input)
-                    if self.journal:
-                        self.journal.log_tool_call(tc.name, tc.input)
-                    await self.hooks.pre_tool(tc.name, tc.input)
-                    _tool_start = time.monotonic()
-                    result = await self.registry.execute(tc.name, tc.input)
-                    _tool_duration_ms = int((time.monotonic() - _tool_start) * 1000)
-                    await self.hooks.post_tool(tc.name, result)
-                    is_error = "error" in result
-                    self.session.add_tool_result(tc.id, result, is_error=is_error)
-                    if self.journal:
-                        self.journal.log_tool_result(tc.name, is_error=is_error, duration_ms=_tool_duration_ms)
-                    if self.tracker:
-                        try:
-                            await self.tracker.log_tool_call(
-                                self.session.id, tc.name, tc.input, result, _tool_duration_ms
-                            )
-                        except Exception as e:
-                            logger.warning("tracker.log_tool_call failed: %s", e)
-                    if self.plan_store:
-                        try:
-                            plan = await self.plan_store.load(self.session.id)
-                            if plan and plan.current_step:
-                                plan.start_step(plan.current_step, tool_name=tc.name)
-                                plan.complete_step(plan.current_step, result_summary=str(result.get("output", ""))[:100])
-                                await self.plan_store.save(self.session.id, plan)
-                        except Exception:
-                            pass
-                    yield ToolResultEvent(
-                        tool_use_id=tc.id,
-                        tool_name=tc.name,
-                        result=result,
-                        is_error=is_error,
-                    )
+                    yield await self._execute_tool(tc)
 
                 else:  # AUTO
-                    if self.journal:
-                        self.journal.log_tool_call(tc.name, tc.input)
-                    await self.hooks.pre_tool(tc.name, tc.input)
-                    _tool_start = time.monotonic()
-                    result = await self.registry.execute(tc.name, tc.input)
-                    _tool_duration_ms = int((time.monotonic() - _tool_start) * 1000)
-                    await self.hooks.post_tool(tc.name, result)
-                    is_error = "error" in result
-                    self.session.add_tool_result(tc.id, result, is_error=is_error)
-                    if self.journal:
-                        self.journal.log_tool_result(tc.name, is_error=is_error, duration_ms=_tool_duration_ms)
-                    if self.tracker:
-                        try:
-                            await self.tracker.log_tool_call(
-                                self.session.id, tc.name, tc.input, result, _tool_duration_ms
-                            )
-                        except Exception as e:
-                            logger.warning("tracker.log_tool_call failed: %s", e)
-                    if self.plan_store:
-                        try:
-                            plan = await self.plan_store.load(self.session.id)
-                            if plan and plan.current_step:
-                                plan.start_step(plan.current_step, tool_name=tc.name)
-                                plan.complete_step(plan.current_step, result_summary=str(result.get("output", ""))[:100])
-                                await self.plan_store.save(self.session.id, plan)
-                        except Exception:
-                            pass
-                    yield ToolResultEvent(
-                        tool_use_id=tc.id,
-                        tool_name=tc.name,
-                        result=result,
-                        is_error=is_error,
-                    )
+                    yield await self._execute_tool(tc)
 
-        # Safety: hit MAX_ITERATIONS
-        logger.warning("AgentLoop hit MAX_ITERATIONS=%d, stopping", MAX_ITERATIONS)
-        yield ErrorEvent(message=f"Reached maximum iterations ({MAX_ITERATIONS})")
+        # Safety: hit max_iterations
+        logger.warning("AgentLoop hit max_iterations=%d, stopping", self.max_iterations)
+        yield ErrorEvent(message=f"Reached maximum iterations ({self.max_iterations})")
         yield DoneEvent()

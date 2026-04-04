@@ -1,4 +1,3 @@
-import os
 from enum import Enum
 from typing import Any
 
@@ -9,7 +8,10 @@ class Permission(str, Enum):
     DENY = "deny"      # Always refuse
 
 
-DEFAULT_PERMISSION = Permission(os.getenv("OMAGENT_DEFAULT_PERMISSION", "prompt"))
+def _get_default_permission() -> Permission:
+    """Resolve default permission from Config (which reads env + .env)."""
+    from omagent.core.config import get_config
+    return Permission(get_config().default_permission)
 
 # Sensible defaults for builtin tools
 BUILTIN_DEFAULTS: dict[str, Permission] = {
@@ -48,7 +50,7 @@ class PermissionPolicy:
             return self._overrides[tool_name]
         if tool_name in BUILTIN_DEFAULTS:
             return BUILTIN_DEFAULTS[tool_name]
-        return DEFAULT_PERMISSION
+        return _get_default_permission()
 
     def __repr__(self) -> str:
         return f"PermissionPolicy(overrides={self._overrides})"

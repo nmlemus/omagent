@@ -1,4 +1,5 @@
 # omagent/core/session.py
+import sqlite3
 import uuid
 import json
 import os
@@ -16,6 +17,17 @@ def get_db_path() -> Path:
     path = Path(env).expanduser() if env else DEFAULT_DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+import contextlib
+
+
+@contextlib.asynccontextmanager
+async def _connect_wal(db_path: Path):
+    """Open an aiosqlite connection with WAL mode enabled."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        yield db
 
 
 class Session:
@@ -184,15 +196,19 @@ class SessionStore:
 
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or get_db_path()
+        self._schema_initialized = False
 
     async def _ensure_schema(self, db: aiosqlite.Connection) -> None:
+        if self._schema_initialized:
+            return
         await db.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 pack_name TEXT NOT NULL DEFAULT 'default',
                 messages TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                message_count INTEGER DEFAULT 0
             )
         """)
         # Migration: add new columns if they don't exist
@@ -205,12 +221,15 @@ class SessionStore:
             ("total_tokens_out", "0"),
             ("total_cost", "0.0"),
             ("summary", "NULL"),
+            ("message_count", "0"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE sessions ADD COLUMN {col} TEXT DEFAULT {default}")
-            except Exception:
-                pass  # column already exists
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
         await db.commit()
+        self._schema_initialized = True
 
     async def create(self, pack_name: str = "default") -> Session:
         session = Session(id=str(uuid.uuid4()), pack_name=pack_name)
@@ -218,16 +237,17 @@ class SessionStore:
         return session
 
     async def save(self, session: Session) -> None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             await db.execute(
                 """
                 INSERT OR REPLACE INTO sessions (
                     id, pack_name, messages, created_at, updated_at,
                     workspace_path, status, title, goal,
-                    total_tokens_in, total_tokens_out, total_cost, summary
+                    total_tokens_in, total_tokens_out, total_cost, summary,
+                    message_count
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
@@ -243,12 +263,13 @@ class SessionStore:
                     session.total_tokens_out,
                     session.total_cost,
                     session.summary,
+                    len(session.messages),
                 ),
             )
             await db.commit()
 
     async def load(self, session_id: str) -> Session | None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             async with db.execute(
                 """
@@ -279,34 +300,28 @@ class SessionStore:
                 })
 
     async def list_sessions(self, limit: int = 50) -> list[dict]:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             async with db.execute(
-                """SELECT id, pack_name, created_at, updated_at, title, messages
+                """SELECT id, pack_name, created_at, updated_at, title, message_count
                    FROM sessions ORDER BY updated_at DESC LIMIT ?""",
                 (limit,),
             ) as cursor:
                 rows = await cursor.fetchall()
-                results = []
-                for r in rows:
-                    msg_count = 0
-                    try:
-                        msgs = json.loads(r[5]) if r[5] else []
-                        msg_count = len(msgs)
-                    except Exception:
-                        pass
-                    results.append({
+                return [
+                    {
                         "id": r[0],
                         "pack_name": r[1],
                         "created_at": r[2],
                         "updated_at": r[3],
                         "title": r[4],
-                        "message_count": msg_count,
-                    })
-                return results
+                        "message_count": int(r[5] or 0),
+                    }
+                    for r in rows
+                ]
 
     async def delete(self, session_id: str) -> bool:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             cursor = await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             await db.commit()

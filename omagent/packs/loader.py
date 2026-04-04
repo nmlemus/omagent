@@ -33,6 +33,11 @@ class DomainPack:
     pack_dir: Path | None = None
 
 
+# Module prefixes allowed for tool imports.
+# Prevents pack.yaml from importing arbitrary code (e.g., os, subprocess).
+ALLOWED_IMPORT_PREFIXES = ("omagent.",)
+
+
 def _import_tool_class(dotted_path: str) -> type[Tool]:
     """
     Import a tool class from a dotted path like 'omagent.tools.builtin.read_file:ReadFileTool'.
@@ -43,6 +48,11 @@ def _import_tool_class(dotted_path: str) -> type[Tool]:
             f"Tool path must be 'module:ClassName', got: {dotted_path!r}"
         )
     module_path, class_name = dotted_path.rsplit(":", 1)
+    if not any(module_path.startswith(prefix) for prefix in ALLOWED_IMPORT_PREFIXES):
+        raise ImportError(
+            f"Module '{module_path}' is not in the allowed import prefixes: "
+            f"{ALLOWED_IMPORT_PREFIXES}. Only omagent.* modules can be loaded as tools."
+        )
     module = importlib.import_module(module_path)
     cls = getattr(module, class_name)
     if not (isinstance(cls, type) and issubclass(cls, Tool)):

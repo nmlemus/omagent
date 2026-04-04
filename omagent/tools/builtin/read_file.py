@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 from omagent.tools.base import Tool
+from omagent.tools.builtin._path_guard import check_path
 
 
 class ReadFileTool(Tool):
@@ -26,7 +27,10 @@ class ReadFileTool(Tool):
         }
 
     async def execute(self, input: dict[str, Any]) -> dict[str, Any]:
-        path = Path(input["path"]).expanduser()
+        path = Path(input["path"]).expanduser().resolve()
+        error = check_path(path)
+        if error:
+            return {"error": error}
         try:
             content = path.read_text(encoding="utf-8")
             return {"output": content, "path": str(path)}

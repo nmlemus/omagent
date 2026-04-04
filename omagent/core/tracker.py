@@ -8,7 +8,7 @@ from typing import Any
 from enum import Enum
 import aiosqlite
 
-from omagent.core.session import get_db_path
+from omagent.core.session import get_db_path, _connect_wal
 
 
 class EventType(str, Enum):
@@ -27,8 +27,11 @@ class ActivityTracker:
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or get_db_path()
         self._pending_llm_start: float | None = None
+        self._schema_initialized = False
 
     async def _ensure_schema(self, db: aiosqlite.Connection) -> None:
+        if self._schema_initialized:
+            return
         await db.execute("""
             CREATE TABLE IF NOT EXISTS activity (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +52,7 @@ class ActivityTracker:
             ON activity(timestamp)
         """)
         await db.commit()
+        self._schema_initialized = True
 
     async def log_event(
         self,
@@ -59,7 +63,7 @@ class ActivityTracker:
         summary: str | None = None,
     ) -> None:
         """Log an activity event."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             await db.execute(
                 """
@@ -156,7 +160,7 @@ class ActivityTracker:
         event_types: list[str] | None = None,
     ) -> list[dict]:
         """Get chronological activity for a session."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             query = "SELECT id, session_id, event_type, timestamp, duration_ms, data, summary FROM activity WHERE session_id = ?"
             params: list[Any] = [session_id]
@@ -193,7 +197,7 @@ class ActivityTracker:
 
         date_prefix = target_date  # SQLite LIKE on ISO timestamps
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
 
             # Count events by type

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from pathlib import Path
 import aiosqlite
-from omagent.core.session import get_db_path
+from omagent.core.session import get_db_path, _connect_wal
 
 
 class PlanStep:
@@ -151,8 +151,11 @@ class PlanStore:
 
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or get_db_path()
+        self._schema_initialized = False
 
     async def _ensure_schema(self, db: aiosqlite.Connection) -> None:
+        if self._schema_initialized:
+            return
         await db.execute("""
             CREATE TABLE IF NOT EXISTS plans (
                 session_id TEXT NOT NULL,
@@ -163,9 +166,10 @@ class PlanStore:
             )
         """)
         await db.commit()
+        self._schema_initialized = True
 
     async def save(self, session_id: str, plan: AgentPlan) -> None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             await db.execute(
                 "INSERT OR REPLACE INTO plans (session_id, plan_json, created_at, updated_at) VALUES (?, ?, ?, ?)",
@@ -174,7 +178,7 @@ class PlanStore:
             await db.commit()
 
     async def load(self, session_id: str) -> AgentPlan | None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             async with db.execute(
                 "SELECT plan_json FROM plans WHERE session_id = ?", (session_id,)

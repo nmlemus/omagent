@@ -185,6 +185,11 @@ class ToolCard(Widget, can_focus=False):
 
         return "\n".join(parts) if parts else "No output"
 
+    def on_unmount(self) -> None:
+        """Stop spinner timer when widget is removed."""
+        if self._spinner_timer:
+            self._spinner_timer.stop()
+
     def on_click(self) -> None:
         """Toggle expanded/collapsed."""
         self.is_expanded = not self.is_expanded

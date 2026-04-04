@@ -1,8 +1,35 @@
 import asyncio
+import logging
+import re
 from typing import Any
 from omagent.tools.base import Tool
 
+logger = logging.getLogger(__name__)
+
 TIMEOUT = 120  # seconds
+
+# Patterns that are too dangerous for automated execution
+_BLOCKED_PATTERNS = [
+    re.compile(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b.*\s+/\s*$"),  # rm -rf /
+    re.compile(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b.*\s+/\w+\s*$"),  # rm -rf /usr etc (top-level)
+    re.compile(r"\bmkfs\b"),
+    re.compile(r"\bdd\s+.*of=/dev/"),
+    re.compile(r"\bcurl\b.*\|\s*sh\b"),
+    re.compile(r"\bcurl\b.*\|\s*bash\b"),
+    re.compile(r"\bwget\b.*\|\s*sh\b"),
+    re.compile(r"\bwget\b.*\|\s*bash\b"),
+    re.compile(r">\s*/etc/"),
+    re.compile(r"\bchmod\s+777\s+/"),
+    re.compile(r"\b:()\s*\{"),  # fork bomb
+]
+
+
+def _is_blocked(command: str) -> str | None:
+    """Return reason if command matches a blocked pattern, else None."""
+    for pattern in _BLOCKED_PATTERNS:
+        if pattern.search(command):
+            return f"Blocked dangerous pattern: {pattern.pattern}"
+    return None
 
 
 class BashTool(Tool):
@@ -35,6 +62,11 @@ class BashTool(Tool):
 
     async def execute(self, input: dict[str, Any]) -> dict[str, Any]:
         command = input["command"]
+        logger.info("bash: %s", command[:200])
+        blocked = _is_blocked(command)
+        if blocked:
+            logger.warning("bash blocked: %s — %s", command[:100], blocked)
+            return {"error": blocked, "command": command}
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,

@@ -12,9 +12,10 @@ class Config(BaseSettings):
     model: str = "anthropic/claude-sonnet-4-6"
 
     # Server
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
     api_key: str | None = None  # Bearer token; if None, auth disabled (dev mode)
+    cors_origins: str = "http://127.0.0.1:8000"  # comma-separated allowed origins
 
     # Domain pack
     default_pack: str = "default"

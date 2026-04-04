@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 from omagent.tools.base import Tool
+from omagent.tools.builtin._path_guard import check_path
 
 
 class WriteFileTool(Tool):
@@ -30,7 +31,10 @@ class WriteFileTool(Tool):
         }
 
     async def execute(self, input: dict[str, Any]) -> dict[str, Any]:
-        path = Path(input["path"]).expanduser()
+        path = Path(input["path"]).expanduser().resolve()
+        error = check_path(path)
+        if error:
+            return {"error": error}
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(input["content"], encoding="utf-8")

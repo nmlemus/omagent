@@ -7,7 +7,7 @@ from typing import Any
 from omagent.core.loop import AgentLoop
 from omagent.core.registry import ToolRegistry
 from omagent.core.session import Session, SessionStore
-from omagent.core.permissions import PermissionPolicy
+from omagent.core.permissions import Permission, PermissionPolicy
 from omagent.core.hooks import HookRunner
 from omagent.core.events import TextDeltaEvent, DoneEvent
 from omagent.providers.litellm_provider import LiteLLMProvider
@@ -74,14 +74,19 @@ class AgentOrchestrator:
             session = Session(id=f"sub-{agent_id}", pack_name=pack_name)
             provider = LiteLLMProvider()
 
+            # Sub-agents inherit pack permissions but never auto-approve
+            # dangerous tools (bash, write_file) — those stay at PROMPT minimum
+            _NEVER_AUTO = {"bash", "write_file"}
+            sub_overrides = {
+                name: Permission.AUTO
+                for name in registry.names()
+                if name not in _NEVER_AUTO
+            }
             loop = AgentLoop(
                 session=session,
                 registry=registry,
                 provider=provider,
-                policy=PermissionPolicy(
-                    # Sub-agents auto-approve everything (supervised by parent)
-                    overrides={name: "auto" for name in registry.names()}
-                ),
+                policy=PermissionPolicy(overrides=sub_overrides),
                 hooks=HookRunner(),
                 system_prompt=system_prompt,
                 store=self.store,

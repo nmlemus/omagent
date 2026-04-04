@@ -10,130 +10,160 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+class LoopBuilder:
+    """Builder for constructing a fully-wired AgentLoop."""
+
+    def __init__(self, pack_name: str, session_id: str | None = None):
+        self.pack_name = pack_name
+        self.session_id = session_id
+
+    def build(self) -> "AgentLoop":
+        from omagent.core.loop import AgentLoop
+        from omagent.core.registry import ToolRegistry
+        from omagent.core.session import Session, SessionStore
+        from omagent.core.permissions import PermissionPolicy
+        from omagent.core.hooks import HookRunner
+        from omagent.providers.litellm_provider import LiteLLMProvider
+        from omagent.tools.builtin import ReadFileTool, WriteFileTool, ListDirTool, BashTool
+
+        store = SessionStore()
+        registry = ToolRegistry()
+        registry.register_many([ReadFileTool(), WriteFileTool(), ListDirTool(), BashTool()])
+
+        policy = PermissionPolicy()
+        mcp_servers: list = []
+        system_prompt = self._load_pack(registry, policy, mcp_servers)
+        skill_registry = self._discover_skills(registry, system_prompt)
+
+        # Update system prompt with skills XML
+        xml_prompt = skill_registry.get_prompt_xml()
+        if xml_prompt:
+            system_prompt += f"\n\n{xml_prompt}"
+
+        session, workspace, journal = self._init_session(
+            registry, skill_registry, LiteLLMProvider()
+        )
+        summarizer, memory_store, plan_store = self._init_persistence(
+            registry, session, workspace
+        )
+
+        # Tell the LLM where to save artifacts
+        system_prompt += (
+            f"\n\n[Workspace]\n"
+            f"Save all generated files (charts, CSVs, reports, notebooks) to: {workspace.artifacts_dir}\n"
+            f"Example: plt.savefig('{workspace.artifacts_dir}/chart.png')\n"
+            f"Example: df.to_csv('{workspace.artifacts_dir}/cleaned_data.csv')\n"
+        )
+
+        from omagent.core.tracker import ActivityTracker
+        loop = AgentLoop(
+            session=session,
+            registry=registry,
+            provider=LiteLLMProvider(),
+            policy=policy,
+            hooks=HookRunner(),
+            system_prompt=system_prompt,
+            store=store,
+            tracker=ActivityTracker(),
+            workspace=workspace,
+            journal=journal,
+            summarizer=summarizer,
+            memory_store=memory_store,
+            plan_store=plan_store,
+            skill_registry=skill_registry,
+        )
+        loop._pending_mcp_servers = mcp_servers
+        return loop
+
+    def _load_pack(self, registry, policy, mcp_servers_out) -> str:
+        """Load domain pack, register tools/permissions. Returns system prompt."""
+        try:
+            from omagent.packs.loader import DomainPackLoader
+            loader = DomainPackLoader()
+            pack = loader.load(self.pack_name)
+            registry.register_many(pack.tools)
+            policy.load_pack_permissions(pack.permissions)
+            mcp_servers_out.extend(pack.mcp_servers)
+            return pack.system_prompt
+        except Exception:
+            return f"You are a helpful AI assistant. Pack: {self.pack_name}."
+
+    def _discover_skills(self, registry, system_prompt) -> "SkillRegistry":
+        """Discover skills from pack, user paths, and walk-up."""
+        from omagent.core.skill_loader import SkillRegistry
+        from omagent.tools.builtin.skill_tool import SkillTool
+
+        skill_registry = SkillRegistry()
+
+        # Pack skills
+        try:
+            from omagent.packs.loader import _find_pack_dir
+            pack_dir = _find_pack_dir(self.pack_name)
+            if pack_dir:
+                pack_skills_dir = pack_dir / "skills"
+                if pack_skills_dir.is_dir():
+                    skill_registry.discover([pack_skills_dir], source="pack")
+        except Exception:
+            pass
+
+        # User + project skills
+        skill_registry.discover([
+            Path.cwd() / ".omagent" / "skills",
+            Path.home() / ".omagent" / "skills",
+            Path.home() / ".claude" / "skills",
+        ], source="user")
+        skill_registry.discover_walk_up()
+
+        registry.register(SkillTool(skill_registry))
+        return skill_registry
+
+    def _init_session(self, registry, skill_registry, provider):
+        """Create session, workspace, and journal."""
+        from omagent.core.session import Session
+        from omagent.core.workspace import Workspace
+        from omagent.core.journal import EventJournal
+
+        sid = self.session_id or __import__("uuid").uuid4().hex
+        session = Session(id=sid, pack_name=self.pack_name)
+        workspace = Workspace(sid)
+        journal = EventJournal(sid, workspace.logs_dir)
+        session.workspace_path = str(workspace.root)
+
+        journal.log("pack_loaded", {
+            "pack_name": self.pack_name,
+            "tools": registry.names(),
+            "skills": skill_registry.names(),
+            "workspace": str(workspace.root),
+        })
+        journal.log_session_start(self.pack_name, provider.model)
+        return session, workspace, journal
+
+    def _init_persistence(self, registry, session, workspace):
+        """Init summarizer, memory, plan store, and cross-cutting tools."""
+        from omagent.core.memory import ConversationSummarizer, MemoryStore
+        from omagent.core.planner import PlanStore
+        from omagent.tools.builtin.remember import RememberTool
+        from omagent.tools.builtin.summarize import SummarizeTool
+
+        summarizer = ConversationSummarizer()
+        memory_store = MemoryStore()
+        plan_store = PlanStore()
+
+        registry.register(RememberTool(memory_store=memory_store, session_id=session.id))
+        registry.register(SummarizeTool(summarizer=summarizer, session=session))
+
+        # Inject workspace into tools that support it
+        for tool_name in registry.names():
+            tool = registry.get(tool_name)
+            if hasattr(tool, '_workspace') and tool._workspace is None:
+                tool._workspace = workspace
+
+        return summarizer, memory_store, plan_store
+
+
 def _build_loop(pack_name: str, session_id: str | None = None):
-    """Build a configured AgentLoop. Imported lazily to keep CLI startup fast."""
-    from omagent.core.loop import AgentLoop
-    from omagent.core.registry import ToolRegistry
-    from omagent.core.session import Session, SessionStore
-    from omagent.core.permissions import PermissionPolicy
-    from omagent.core.hooks import HookRunner
-    from omagent.providers.litellm_provider import LiteLLMProvider
-    from omagent.tools.builtin import ReadFileTool, WriteFileTool, ListDirTool, BashTool
-
-    store = SessionStore()
-    registry = ToolRegistry()
-    registry.register_many([ReadFileTool(), WriteFileTool(), ListDirTool(), BashTool()])
-
-    policy = PermissionPolicy()
-    mcp_servers = []
-
-    # Try to load domain pack if available
-    from omagent.core.skill_loader import SkillRegistry
-    skill_registry = SkillRegistry()
-
-    try:
-        from omagent.packs.loader import DomainPackLoader
-        loader = DomainPackLoader()
-        pack = loader.load(pack_name)
-        system_prompt = pack.system_prompt
-        registry.register_many(pack.tools)
-        policy.load_pack_permissions(pack.permissions)
-        mcp_servers = pack.mcp_servers
-
-        # Discover skills from pack directory
-        if pack.pack_dir:
-            pack_skills_dir = pack.pack_dir / "skills"
-            if pack_skills_dir.is_dir():
-                skill_registry.discover([pack_skills_dir], source="pack")
-    except Exception:
-        system_prompt = f"You are a helpful AI assistant. Pack: {pack_name}."
-
-    # Discover from standard paths + walk-up
-    skill_registry.discover([
-        Path.cwd() / ".omagent" / "skills",
-        Path.home() / ".omagent" / "skills",
-        Path.home() / ".claude" / "skills",
-    ], source="user")
-    skill_registry.discover_walk_up()
-
-    # Add <available_skills> XML to system prompt
-    xml_prompt = skill_registry.get_prompt_xml()
-    if xml_prompt:
-        system_prompt += f"\n\n{xml_prompt}"
-
-    skills_loaded = skill_registry.names()
-
-    from omagent.tools.builtin.skill_tool import SkillTool
-    registry.register(SkillTool(skill_registry))
-
-    from omagent.core.tracker import ActivityTracker
-    from omagent.core.workspace import Workspace
-    from omagent.core.journal import EventJournal
-    from omagent.core.memory import ConversationSummarizer, MemoryStore
-    from omagent.core.planner import PlanStore
-    from omagent.tools.builtin.remember import RememberTool
-    from omagent.tools.builtin.summarize import SummarizeTool
-
-    sid = session_id or __import__("uuid").uuid4().hex
-    session = Session(id=sid, pack_name=pack_name)
-
-    workspace = Workspace(sid)
-    journal = EventJournal(sid, workspace.logs_dir)
-    summarizer = ConversationSummarizer()
-    memory_store = MemoryStore()
-    plan_store = PlanStore()
-
-    session.workspace_path = str(workspace.root)
-
-    # Log pack loading to journal
-    journal.log("pack_loaded", {
-        "pack_name": pack_name,
-        "tools": registry.names(),
-        "skills": skills_loaded,
-        "workspace": str(workspace.root),
-    })
-    journal.log_session_start(pack_name, LiteLLMProvider().model)
-
-    # Register cross-cutting tools (transversal — available in ALL packs)
-    remember_tool = RememberTool(memory_store=memory_store, session_id=sid)
-    summarize_tool = SummarizeTool(summarizer=summarizer, session=session)
-    registry.register(remember_tool)
-    registry.register(summarize_tool)
-
-    # Inject workspace into tools that support it
-    for tool_name in registry.names():
-        tool = registry.get(tool_name)
-        if hasattr(tool, '_workspace') and tool._workspace is None:
-            tool._workspace = workspace
-
-    # Tell the LLM where to save artifacts
-    workspace_instruction = (
-        f"\n\n[Workspace]\n"
-        f"Save all generated files (charts, CSVs, reports, notebooks) to: {workspace.artifacts_dir}\n"
-        f"Example: plt.savefig('{workspace.artifacts_dir}/chart.png')\n"
-        f"Example: df.to_csv('{workspace.artifacts_dir}/cleaned_data.csv')\n"
-    )
-    system_prompt += workspace_instruction
-
-    loop = AgentLoop(
-        session=session,
-        registry=registry,
-        provider=LiteLLMProvider(),
-        policy=policy,
-        hooks=HookRunner(),
-        system_prompt=system_prompt,
-        store=store,
-        tracker=ActivityTracker(),
-        workspace=workspace,
-        journal=journal,
-        summarizer=summarizer,
-        memory_store=memory_store,
-        plan_store=plan_store,
-        skill_registry=skill_registry,
-    )
-    # Attach mcp_servers list so async callers can connect them
-    loop._pending_mcp_servers = mcp_servers
-    return loop
+    """Build a configured AgentLoop. Convenience wrapper around LoopBuilder."""
+    return LoopBuilder(pack_name, session_id).build()
 
 
 async def _connect_mcp(loop) -> None:
@@ -640,8 +670,10 @@ def serve(host: str | None, port: int | None, pack: str | None):
     import uvicorn
     from omagent.server.app import create_app
 
-    h = host or os.getenv("OMAGENT_HOST", "0.0.0.0")
-    p = port or int(os.getenv("OMAGENT_PORT", "8000"))
+    from omagent.core.config import get_config
+    cfg = get_config()
+    h = host or cfg.host
+    p = port or cfg.port
     pack_name = pack or os.getenv("OMAGENT_PACK", "default")
 
     app = create_app(default_pack=pack_name, loop_factory=_build_loop)

@@ -84,7 +84,8 @@ class SkillRegistry:
         """
         cwd = cwd or Path.cwd()
         count = 0
-        for ancestor in cwd.parents:
+        import itertools
+        for ancestor in itertools.chain([cwd], cwd.parents):
             for leaf in (".omagent/skills", ".claude/skills"):
                 skills_dir = ancestor / leaf
                 if skills_dir.is_dir():
@@ -93,6 +94,10 @@ class SkillRegistry:
             if ancestor == ancestor.parent:
                 break
         return count
+
+    # Trust tiers: builtin > user > project
+    # Project-local skills (from cloned repos) may contain untrusted content
+    TRUSTED_SOURCES = {"builtin", "pack"}
 
     def _load_skill(self, skill_dir: Path, source: str) -> Skill | None:
         """Load and validate a single skill directory."""
@@ -109,6 +114,14 @@ class SkillRegistry:
             return None
 
         skill = Skill.from_properties(props, skill_dir, source)
+
+        # Warn on project-local skills (potential prompt injection from cloned repos)
+        if source == "project" and source not in self.TRUSTED_SOURCES:
+            logger.warning(
+                "Loading project-local skill '%s' from %s — "
+                "project skills may contain untrusted instructions",
+                skill.name, skill_dir,
+            )
 
         # Don't overwrite existing (first found wins — higher priority)
         if skill.name not in self._skills:

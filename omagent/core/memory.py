@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
-from omagent.core.session import get_db_path
+from omagent.core.session import get_db_path, _connect_wal
 
 logger = logging.getLogger(__name__)
 
@@ -175,8 +175,11 @@ class MemoryStore:
 
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or get_db_path()
+        self._schema_initialized = False
 
     async def _ensure_schema(self, db: aiosqlite.Connection) -> None:
+        if self._schema_initialized:
+            return
         await db.execute("""
             CREATE TABLE IF NOT EXISTS memories (
                 session_id TEXT NOT NULL,
@@ -188,11 +191,12 @@ class MemoryStore:
             )
         """)
         await db.commit()
+        self._schema_initialized = True
 
     async def set(self, session_id: str, key: str, value: str) -> None:
         """Store or update a memory."""
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             await db.execute(
                 """
@@ -207,7 +211,7 @@ class MemoryStore:
 
     async def get(self, session_id: str, key: str) -> str | None:
         """Retrieve a memory value."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             async with db.execute(
                 "SELECT value FROM memories WHERE session_id = ? AND key = ?",
@@ -218,7 +222,7 @@ class MemoryStore:
 
     async def get_all(self, session_id: str) -> dict[str, str]:
         """Get all memories for a session."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             async with db.execute(
                 "SELECT key, value FROM memories WHERE session_id = ? ORDER BY updated_at",
@@ -228,7 +232,7 @@ class MemoryStore:
 
     async def delete(self, session_id: str, key: str) -> bool:
         """Delete a memory."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with _connect_wal(self.db_path) as db:
             await self._ensure_schema(db)
             cursor = await db.execute(
                 "DELETE FROM memories WHERE session_id = ? AND key = ?",

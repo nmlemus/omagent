@@ -50,10 +50,8 @@ class OmagentApp(App):
         self._session_id = session_id
         self._agent_loop = None
         self._is_processing = False
-        self._total_tokens_in = 0
-        self._total_tokens_out = 0
-        self._total_cost = 0.0
         self._tool_calls_count = 0
+        self._loaded_skills: set[str] = set()
         self._turn_count = 0
 
     def compose(self) -> ComposeResult:
@@ -344,116 +342,147 @@ class OmagentApp(App):
         parts = command.split()
         cmd = parts[0].lower()
 
-        if cmd == "/help":
-            help_text = (
-                "[bold]Commands:[/]\n"
-                "  [#a8b4f0]/help[/]           — Show this help\n"
-                "  [#a8b4f0]/tools[/]          — List available tools\n"
-                "  [#a8b4f0]/session new[/]    — Start new session\n"
-                "  [#a8b4f0]/session list[/]   — List sessions\n"
-                "  [#a8b4f0]/session resume[/] — Resume a session\n"
-                "  [#a8b4f0]/stop[/]           — Stop running agent\n"
-                "  [#a8b4f0]/pack <name>[/]    — Switch domain pack\n"
-                "  [#a8b4f0]/model[/]          — Show current model\n"
-                "  [#a8b4f0]/clear[/]          — Clear chat\n"
-                "  [#a8b4f0]/quit[/]           — Exit\n\n"
-                "[dim]Shortcuts:[/] Ctrl+N New | Ctrl+T Sidebar | Ctrl+E Events | Ctrl+Q Quit"
-            )
-            if hasattr(self, '_skill_registry') and self._skill_registry:
-                invocable = self._skill_registry.get_user_invocable()
-                if invocable:
-                    help_text += "\n\n[bold]Skills:[/]\n"
-                    for s in invocable:
-                        help_text += f"  [#a8b4f0]/{s.name}[/] — {s.description[:50]}\n"
-            chat.add_system_message(help_text)
-        elif cmd == "/tools":
-            schemas = self._agent_loop.registry.get_schemas()
-            if schemas:
-                lines = ["[bold]Available Tools:[/]\n"]
-                for s in schemas:
-                    lines.append(f"  [#80cbc4]●[/] [bold]{s['name']}[/] — [dim]{s.get('description', '')[:60]}[/]")
-                chat.add_system_message("\n".join(lines))
-            else:
-                chat.add_system_message("[dim]No tools registered.[/]")
-        elif cmd == "/session":
-            if len(parts) > 1 and parts[1] == "new":
-                self._session_id = None
-                self._init_loop()
-                self._turn_count = 0
-                self._tool_calls_count = 0
-                chat.clear_messages()
-                chat.add_system_message(f"New session: [#80cbc4]{self._agent_loop.session.id[:8]}…[/]")
-                self._update_sidebar()
-                self._update_status_bar_meta()
-            elif len(parts) > 1 and parts[1] == "resume":
-                if len(parts) < 3:
-                    chat.add_system_message("[#ef9a9a]Usage:[/] /session resume <ID>")
-                    return
-                target_id = parts[2]
-                await self._resume_session(target_id)
-            elif len(parts) > 1 and parts[1] == "list":
-                if self._agent_loop.store:
-                    sessions = await self._agent_loop.store.list_sessions()
-                    if sessions:
-                        lines = ["[bold]Recent Sessions:[/]\n"]
-                        for s in sessions[:10]:
-                            title = s.get("title") or ""
-                            msgs = s.get("message_count", 0)
-                            title_str = f" [bold]{title}[/]" if title else ""
-                            lines.append(
-                                f"  [#80cbc4]{s['id'][:12]}[/]{title_str} "
-                                f"{s['pack_name']} "
-                                f"[dim]{msgs} msgs · {s['updated_at'][:16]}[/]"
-                            )
-                        lines.append("\n[dim]Resume with:[/] /session resume <ID>")
-                        chat.add_system_message("\n".join(lines))
-                    else:
-                        chat.add_system_message("[dim]No sessions found.[/]")
-        elif cmd == "/stop":
-            self.action_stop_agent()
-        elif cmd == "/pack" and len(parts) > 1:
-            self.pack_name = parts[1]
+        # Dispatch table for simple commands
+        dispatch = {
+            "/help": self._cmd_help,
+            "/tools": self._cmd_tools,
+            "/session": self._cmd_session,
+            "/stop": self._cmd_stop,
+            "/pack": self._cmd_pack,
+            "/model": self._cmd_model,
+            "/clear": self._cmd_clear,
+            "/quit": self._cmd_quit,
+            "/skills": self._cmd_skills,
+        }
+
+        handler = dispatch.get(cmd)
+        if handler:
+            await handler(chat, parts)
+        else:
+            await self._cmd_skill_or_unknown(chat, cmd)
+
+    async def _cmd_help(self, chat, parts) -> None:
+        help_text = (
+            "[bold]Commands:[/]\n"
+            "  [#a8b4f0]/help[/]           — Show this help\n"
+            "  [#a8b4f0]/tools[/]          — List available tools\n"
+            "  [#a8b4f0]/session new[/]    — Start new session\n"
+            "  [#a8b4f0]/session list[/]   — List sessions\n"
+            "  [#a8b4f0]/session resume[/] — Resume a session\n"
+            "  [#a8b4f0]/stop[/]           — Stop running agent\n"
+            "  [#a8b4f0]/pack <name>[/]    — Switch domain pack\n"
+            "  [#a8b4f0]/model[/]          — Show current model\n"
+            "  [#a8b4f0]/clear[/]          — Clear chat\n"
+            "  [#a8b4f0]/quit[/]           — Exit\n\n"
+            "[dim]Shortcuts:[/] Ctrl+N New | Ctrl+T Sidebar | Ctrl+E Events | Ctrl+Q Quit"
+        )
+        if hasattr(self, '_skill_registry') and self._skill_registry:
+            invocable = self._skill_registry.get_user_invocable()
+            if invocable:
+                help_text += "\n\n[bold]Skills:[/]\n"
+                for s in invocable:
+                    help_text += f"  [#a8b4f0]/{s.name}[/] — {s.description[:50]}\n"
+        chat.add_system_message(help_text)
+
+    async def _cmd_tools(self, chat, parts) -> None:
+        schemas = self._agent_loop.registry.get_schemas()
+        if schemas:
+            lines = ["[bold]Available Tools:[/]\n"]
+            for s in schemas:
+                lines.append(f"  [#80cbc4]●[/] [bold]{s['name']}[/] — [dim]{s.get('description', '')[:60]}[/]")
+            chat.add_system_message("\n".join(lines))
+        else:
+            chat.add_system_message("[dim]No tools registered.[/]")
+
+    async def _cmd_session(self, chat, parts) -> None:
+        if len(parts) > 1 and parts[1] == "new":
             self._session_id = None
             self._init_loop()
             self._turn_count = 0
             self._tool_calls_count = 0
             chat.clear_messages()
-            chat.add_system_message(f"Switched to pack: [#a8b4f0]{self.pack_name}[/]")
+            chat.add_system_message(f"New session: [#80cbc4]{self._agent_loop.session.id[:8]}…[/]")
             self._update_sidebar()
             self._update_status_bar_meta()
-        elif cmd == "/model":
-            model = getattr(self._agent_loop.provider, 'model', 'unknown')
-            chat.add_system_message(f"Model: [bold]{model}[/]")
-        elif cmd == "/clear":
-            chat.clear_messages()
-        elif cmd == "/quit":
-            self.exit()
-        elif cmd == "/skills":
-            if self._skill_registry:
-                skills = self._skill_registry.list_all()
-                if skills:
-                    lines = ["[bold]Available Skills:[/]\n"]
-                    for s in skills:
-                        lines.append(f"  [#a8b4f0]/{s['name']}[/] — {s['description'][:50]} [dim]({s['source']})[/]")
+        elif len(parts) > 1 and parts[1] == "resume":
+            if len(parts) < 3:
+                chat.add_system_message("[#ef9a9a]Usage:[/] /session resume <ID>")
+                return
+            await self._resume_session(parts[2])
+        elif len(parts) > 1 and parts[1] == "list":
+            if self._agent_loop.store:
+                sessions = await self._agent_loop.store.list_sessions()
+                if sessions:
+                    lines = ["[bold]Recent Sessions:[/]\n"]
+                    for s in sessions[:10]:
+                        title = s.get("title") or ""
+                        msgs = s.get("message_count", 0)
+                        title_str = f" [bold]{title}[/]" if title else ""
+                        lines.append(
+                            f"  [#80cbc4]{s['id'][:12]}[/]{title_str} "
+                            f"{s['pack_name']} "
+                            f"[dim]{msgs} msgs · {s['updated_at'][:16]}[/]"
+                        )
+                    lines.append("\n[dim]Resume with:[/] /session resume <ID>")
                     chat.add_system_message("\n".join(lines))
                 else:
-                    chat.add_system_message("[dim]No skills found.[/]")
+                    chat.add_system_message("[dim]No sessions found.[/]")
+
+    async def _cmd_stop(self, chat, parts) -> None:
+        self.action_stop_agent()
+
+    async def _cmd_pack(self, chat, parts) -> None:
+        if len(parts) < 2:
+            chat.add_system_message(f"Current pack: [#a8b4f0]{self.pack_name}[/]")
             return
-        else:
-            # Check if it's a skill command
-            activity = self._get_activity_log()
-            if hasattr(self, '_skill_registry') and self._skill_registry:
-                skill = self._skill_registry.get_by_name(cmd.lstrip("/"))
-                if skill:
-                    content = self._skill_registry.get_full_content(skill.name)
-                    if content:
-                        chat.add_system_message(f"[#a8b4f0]Loaded skill:[/] `{skill.name}` — {skill.description[:60]}")
-                        # Inject into the loop's system prompt
-                        self._agent_loop.system_prompt += f"\n\n[Skill: {skill.name}]\n{content}"
-                        if activity:
-                            activity.add_entry(f"Skill loaded: {skill.name}")
+        self.pack_name = parts[1]
+        self._session_id = None
+        self._init_loop()
+        self._turn_count = 0
+        self._tool_calls_count = 0
+        chat.clear_messages()
+        chat.add_system_message(f"Switched to pack: [#a8b4f0]{self.pack_name}[/]")
+        self._update_sidebar()
+        self._update_status_bar_meta()
+
+    async def _cmd_model(self, chat, parts) -> None:
+        model = getattr(self._agent_loop.provider, 'model', 'unknown')
+        chat.add_system_message(f"Model: [bold]{model}[/]")
+
+    async def _cmd_clear(self, chat, parts) -> None:
+        chat.clear_messages()
+
+    async def _cmd_quit(self, chat, parts) -> None:
+        self.exit()
+
+    async def _cmd_skills(self, chat, parts) -> None:
+        if self._skill_registry:
+            skills = self._skill_registry.list_all()
+            if skills:
+                lines = ["[bold]Available Skills:[/]\n"]
+                for s in skills:
+                    lines.append(f"  [#a8b4f0]/{s['name']}[/] — {s['description'][:50]} [dim]({s['source']})[/]")
+                chat.add_system_message("\n".join(lines))
+            else:
+                chat.add_system_message("[dim]No skills found.[/]")
+
+    async def _cmd_skill_or_unknown(self, chat, cmd: str) -> None:
+        activity = self._get_activity_log()
+        if hasattr(self, '_skill_registry') and self._skill_registry:
+            skill = self._skill_registry.get_by_name(cmd.lstrip("/"))
+            if skill:
+                if skill.name in self._loaded_skills:
+                    chat.add_system_message(f"[dim]Skill already loaded:[/] `{skill.name}`")
                     return
-            chat.add_system_message(f"[#ef9a9a]Unknown command:[/] {cmd}. Type [bold]/help[/]")
+                content = self._skill_registry.get_full_content(skill.name)
+                if content:
+                    chat.add_system_message(f"[#a8b4f0]Loaded skill:[/] `{skill.name}` — {skill.description[:60]}")
+                    self._agent_loop.system_prompt += f"\n\n[Skill: {skill.name}]\n{content}"
+                    self._loaded_skills.add(skill.name)
+                    if activity:
+                        activity.add_entry(f"Skill loaded: {skill.name}")
+                return
+        chat.add_system_message(f"[#ef9a9a]Unknown command:[/] {cmd}. Type [bold]/help[/]")
 
     async def _resume_session(self, partial_id: str) -> None:
         """Resume a previous session by full or partial ID."""
@@ -575,7 +604,12 @@ class OmagentApp(App):
     def action_toggle_activity_log(self) -> None:
         self.query_one("#activity-log", ActivityLog).toggle_class("hidden")
 
-    def action_quit_app(self) -> None:
+    async def action_quit_app(self) -> None:
+        if self._agent_loop and self._agent_loop.mcp_manager:
+            try:
+                await self._agent_loop.mcp_manager.disconnect_all()
+            except Exception:
+                pass
         self.exit()
 
     def action_focus_input(self) -> None:
